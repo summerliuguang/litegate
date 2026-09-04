@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LiteGate</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    max-width: 720px; margin: 10vh auto 0; padding: 0 24px; line-height: 1.7;
+  }
+  h1 { font-size: 28px; margin-bottom: 4px; }
+  .badge { display: inline-block; padding: 2px 12px; border-radius: 999px; font-size: 14px; }
+  .ok { background: #e6f7e9; color: #1a7f37; }
+  .bad { background: #fdebec; color: #c0392b; }
+  code { background: rgba(127,127,127,.15); padding: 2px 6px; border-radius: 4px; }
+  ul { padding-left: 20px; }
+</style>
+</head>
+<body>
+<h1>LiteGate</h1>
+<p>轻量级 AI 网关 · 状态：<span id="status" class="badge">检查中…</span></p>
+<ul>
+  <li>数据面：<code>POST /v1/chat/completions</code> · <code>POST /v1/messages</code> · <code>GET /v1/models</code></li>
+  <li>管理面：<code>POST /api/admin/login</code> → <code>/api/admin/*</code></li>
+  <li>健康检查：<code>GET /healthz</code></li>
+</ul>
+<p>完整管理界面在后续版本中提供，当前请使用管理 API。</p>
+<script>
+fetch('/healthz').then(r => r.json()).then(j => {
+  const el = document.getElementById('status');
+  el.textContent = '运行中';
+  el.className = 'badge ok';
+}).catch(() => {
+  const el = document.getElementById('status');
+  el.textContent = '异常';
+  el.className = 'badge bad';
+});
+</script>
+</body>
+</html>

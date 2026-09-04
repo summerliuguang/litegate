@@ -1,0 +1,7 @@
+/litegate
+/litegate.db
+/litegate.db-shm
+/litegate.db-wal
+*.test
+/web/node_modules
+/web/dist
