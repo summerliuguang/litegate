@@ -32,6 +32,9 @@ func (a *admin) register(mux *http.ServeMux) {
 	mux.Handle("POST /api/admin/keys", a.auth(a.createKey))
 	mux.Handle("DELETE /api/admin/keys/{id}", a.auth(a.deleteKey))
 	mux.Handle("GET /api/admin/logs", a.auth(a.listLogs))
+	mux.Handle("GET /api/admin/prices", a.auth(a.listPrices))
+	mux.Handle("PUT /api/admin/prices", a.auth(a.upsertPrice))
+	mux.Handle("DELETE /api/admin/prices/{model...}", a.auth(a.deletePrice))
 }
 
 func (a *admin) auth(next http.HandlerFunc) http.Handler {
@@ -275,11 +278,68 @@ func (a *admin) deleteKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *admin) listLogs(w http.ResponseWriter, r *http.Request) {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	logs, err := a.st.ListRequestLogs(limit)
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	f := store.LogFilter{
+		Limit:  limit,
+		Offset: offset,
+		Model:  q.Get("model"),
+		Status: q.Get("status"),
+		Since:  q.Get("since"),
+		Until:  q.Get("until"),
+	}
+	f.ChannelID, _ = strconv.ParseInt(q.Get("channel_id"), 10, 64)
+	f.APIKeyID, _ = strconv.ParseInt(q.Get("api_key_id"), 10, 64)
+	page, err := a.st.ListLogs(f)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, logs)
+	writeJSON(w, http.StatusOK, page)
+}
+
+// ---- 模型价格管理 ----
+
+type priceIn struct {
+	Model       string  `json:"model"`
+	InputPrice  float64 `json:"input_price"`
+	OutputPrice float64 `json:"output_price"`
+}
+
+func (a *admin) listPrices(w http.ResponseWriter, _ *http.Request) {
+	prices, err := a.st.ListModelPrices()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, prices)
+}
+
+func (a *admin) upsertPrice(w http.ResponseWriter, r *http.Request) {
+	var in priceIn
+	if readJSON(w, r, &in) != nil {
+		return
+	}
+	in.Model = strings.TrimSpace(in.Model)
+	if in.Model == "" || in.InputPrice < 0 || in.OutputPrice < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "model is required and prices must be non-negative"})
+		return
+	}
+	p := &store.ModelPrice{Model: in.Model, InputPrice: in.InputPrice, OutputPrice: in.OutputPrice}
+	if err := a.st.UpsertModelPrice(p); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (a *admin) deletePrice(w http.ResponseWriter, r *http.Request) {
+	model := r.PathValue("model")
+	if err := a.st.DeleteModelPrice(model); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "price not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

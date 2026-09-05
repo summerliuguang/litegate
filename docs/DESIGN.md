@@ -212,14 +212,20 @@ GET  /healthz
 - [x] 内嵌 Web UI 骨架（状态页）、`GET /v1/models` 聚合（60s 缓存）、`/healthz`
 - [x] 请求日志（模型/协议/状态/耗时/错误）+ 仪表盘聚合统计
 
-### M2 —— 可观测
-- [ ] 请求日志 + Token 统计（流式按 SSE usage 字段/近似计算）
-- [ ] 内置价格表 + 成本估算 + 仪表盘
-- [ ] 密钥额度/过期/模型白名单
+### M2 —— 可观测（✅ 已完成 2026-09-04）
+- [x] 请求级 Token 计量：usage 从上游响应被动提取，不改透传字节；Anthropic 流式从
+  `message_start`/`message_delta` 合并，OpenAI 流式自动注入 `stream_options.include_usage`
+  （上游 400 不识别时自动去掉重试一次）；日志新增 tokens/cost/ttfb_ms 列（旧库自动迁移）
+- [x] 模型价格表（美元/百万 token）+ 成本核算：精确匹配 → 最长段边界前缀回退
+  （`gpt-4o` 覆盖 `gpt-4o-2024-08-06`）；价格缓存 60s
+- [x] 仪表盘完善：今日请求/错误/token/费用、近 7 天逐日趋势、按模型/按渠道 Top10
+- [x] 日志过滤分页：channel_id/api_key_id/model/status/since/until + offset，返回 total
+- [ ] 密钥额度/过期/模型白名单（顺延至 M3）
 
 ### M3 —— 容灾与 Agent 接入（差异化）
 - [ ] 自动重试、故障转移、冷却与半开恢复、健康巡检
 - [ ] 会话亲和（可选）
+- [ ] 密钥额度/过期/模型白名单（自 M2 顺延）
 - [ ] Claude Code / Codex / Gemini CLI 一键接入配置生成
 
 ### M4 —— 打磨与发布

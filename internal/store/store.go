@@ -56,10 +56,18 @@ CREATE TABLE IF NOT EXISTS request_logs (
 	latency_ms        INTEGER NOT NULL DEFAULT 0,
 	prompt_tokens     INTEGER NOT NULL DEFAULT 0,
 	completion_tokens INTEGER NOT NULL DEFAULT 0,
+	cost              REAL NOT NULL DEFAULT 0,
+	ttfb_ms           INTEGER NOT NULL DEFAULT 0,
 	error             TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_logs_ts ON request_logs(ts);
 CREATE INDEX IF NOT EXISTS idx_logs_channel ON request_logs(channel_id);
+CREATE TABLE IF NOT EXISTS model_prices (
+	model        TEXT PRIMARY KEY,
+	input_price  REAL NOT NULL DEFAULT 0,
+	output_price REAL NOT NULL DEFAULT 0,
+	updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `
 
 // Open 打开（必要时创建）数据库。secret 为 32 字节 AES 主密钥；
@@ -80,6 +88,10 @@ func Open(path string, secret []byte) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate schema: %w", err)
+	}
 	s := &Store{DB: db}
 	key, err := s.loadOrCreateSecret(secret)
 	if err != nil {
@@ -91,6 +103,40 @@ func Open(path string, secret []byte) (*Store, error) {
 }
 
 func (s *Store) Close() error { return s.DB.Close() }
+
+// migrate 为 M1 时期创建的旧库补齐后加的列（SQLite 不支持 ADD COLUMN IF NOT EXISTS）。
+func migrate(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(request_logs)`)
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var dflt any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		have[name] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, m := range []struct{ col, ddl string }{
+		{"cost", `ALTER TABLE request_logs ADD COLUMN cost REAL NOT NULL DEFAULT 0`},
+		{"ttfb_ms", `ALTER TABLE request_logs ADD COLUMN ttfb_ms INTEGER NOT NULL DEFAULT 0`},
+	} {
+		if !have[m.col] {
+			if _, err := db.Exec(m.ddl); err != nil {
+				return fmt.Errorf("add column %s: %w", m.col, err)
+			}
+		}
+	}
+	return nil
+}
 
 func (s *Store) Secret() []byte { return s.secret }
 
