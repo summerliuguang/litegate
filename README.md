@@ -6,11 +6,12 @@
 - **单二进制 ~12MB**，空载内存 ~20MB，无 Python / Node 运行时，**不依赖 Docker**
 - 默认 SQLite（WAL），零外部服务；凭证 AES-256-GCM 加密存储
 - 下游协议：OpenAI（`/v1/chat/completions`、`/v1/embeddings`、`/v1/responses`）、Anthropic（`/v1/messages`、`/v1/messages/count_tokens`，Claude Code 可直连）；Responses 桥接到 chat 渠道，Codex 等原生 Responses 客户端可用
-- 上游渠道：OpenAI 兼容 / Anthropic 兼容，多渠道加权轮询、按优先级故障转移
+- 上游渠道：OpenAI 兼容 / Anthropic 兼容，**单渠道多密钥**加权轮询、坏 key 自动冷却换下一把、后台巡检自动恢复；按优先级故障转移；模型映射（对外别名 → 上游真实名）
+- 虚拟密钥治理：模型白名单、RPM/TPM 限速、日/月预算（美元或 token，超限 429）、过期时间
 - 用量统计：请求级 Token 计量（含 prompt caching 缓存 token，读按 1/10 价计费）、成本核算（模型价格可配）、日志过滤分页、用量看板（今日/近 7 天/按渠道/按模型）
 - 内嵌管理页面与管理 API：渠道 CRUD、连通性测试、虚拟密钥、请求日志、用量看板
 
-> 设计文档见 [docs/DESIGN.md](docs/DESIGN.md)。M1 数据面、M2 用量统计、M2.5 管理台与安全加固、M3 协议补齐（Responses API / count_tokens / prompt caching 计费）已交付；下一步 M4 渠道与密钥治理。
+> 设计文档见 [docs/DESIGN.md](docs/DESIGN.md)。M1 数据面、M2 用量统计、M2.5 管理台与安全加固、M3 协议补齐（Responses API / count_tokens / prompt caching 计费）、M4 渠道与密钥治理已交付；下一步 M5 可观测与运维。
 
 ## 构建
 
@@ -94,13 +95,16 @@ export ANTHROPIC_API_KEY=sk-lg-xxxx   # 网关虚拟密钥
 ```
 POST   /api/admin/login                 {password} → {token}
 GET    /api/admin/dashboard             今日请求/错误、渠道与密钥统计
-GET    /api/admin/channels              渠道列表（api_key 打码）
-POST   /api/admin/channels              新建渠道
-PUT    /api/admin/channels/{id}         更新（api_key 留空表示沿用）
+GET    /api/admin/channels              渠道列表（密钥打码，含每把 key 的启停状态）
+POST   /api/admin/channels              新建渠道（api_keys 数组 = 多把密钥）
+PUT    /api/admin/channels/{id}         更新（api_keys 未传 = 密钥不动；传了 = 全量替换，启停状态保留）
 DELETE /api/admin/channels/{id}
-POST   /api/admin/channels/{id}/test    连通性测试（拉取上游模型列表）
+POST   /api/admin/channels/{id}/test    连通性测试（逐密钥返回结果）
+POST   /api/admin/channels/{id}/keys/{key_id}/enable|disable   手动启停单把渠道密钥
 GET    /api/admin/keys                  虚拟密钥列表
-POST   /api/admin/keys                  签发密钥 {name}
+POST   /api/admin/keys                  签发密钥 {name, allowed_models, rpm_limit, tpm_limit,
+                                        budget_usd, budget_period, budget_tokens, expires_at}
+PUT    /api/admin/keys/{id}             更新（同上字段全量替换）
 DELETE /api/admin/keys/{id}
 GET    /api/admin/logs?limit=100        请求日志（支持 limit/offset/channel_id/api_key_id/
                                         model/status=ok|error/since/until 过滤分页，返回 {items,total}）
@@ -146,7 +150,9 @@ go test ./...
       错误脱敏、8080 收敛 127.0.0.1
 - [x] M3 协议补齐：`/v1/responses`（Responses API，chat 渠道桥接 + SSE + 工具调用）、
       `/v1/messages/count_tokens`、prompt caching 计费（读 1/10 价、写 1.25 倍价）
-- [ ] M4 渠道与密钥治理：渠道多 key 池与冷却/健康巡检、模型映射别名、密钥预算与 RPM/TPM 限速、fallback 细化
+- [x] M4 渠道与密钥治理：渠道多 key 池（加权轮询、401/403 自动换 key、连续失败指数冷却、
+      后台巡检恢复）、模型映射别名、虚拟密钥 RPM/TPM 限速 + 日/月美元/token 预算 + 过期时间、
+      多 key 渠道把上游 401/403 视为密钥问题自动轮换
 - [ ] M5 可观测与运维：TTFT/延迟分位、按密钥/应用用量分摊、SQLite 运维、配置导入导出
 - [ ] M6+ 按需：`/mcp` 透传、rerank、精确响应缓存、Agent 一键接入配置生成
 

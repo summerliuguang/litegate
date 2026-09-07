@@ -458,16 +458,6 @@ func (p *proxy) serveResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 流式请求补 stream_options.include_usage；上游 400 时对同一渠道去掉重试一次
-	attemptBody := chatBody
-	usageInjected := false
-	if in.Stream {
-		if b, ok := injectStreamUsage(chatBody); ok {
-			attemptBody = b
-			usageInjected = true
-		}
-	}
-
 	chans, err := p.st.ListChannels("openai")
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -479,68 +469,57 @@ func (p *proxy) serveResponses(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no enabled channel serves model: " + in.Model})
 		return
 	}
+	// 虚拟密钥的模型白名单：留空不限制；配置了则只放行列出的模型
 	if !ak.AllowsModel(in.Model) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "model not allowed for this api key: " + in.Model})
 		return
 	}
-
-	start := time.Now()
-	attempts := orderCandidates(chans)
-	if len(attempts) > 3 {
-		attempts = attempts[:3]
-	}
-
-	var lastErr error
-	i := 0
-	for i < len(attempts) {
-		c := &attempts[i]
-		resp, err := p.attemptUpstream(r, c, "/chat/completions", attemptBody)
-		if err != nil {
-			lastErr = fmt.Errorf("channel %q: %w", c.Name, err)
-			i++
-			continue
+	// 准入控制：过期 / RPM/TPM 限速 / 日月预算
+	if code, msg := p.limits.admit(ak); code != 0 {
+		if code == http.StatusTooManyRequests {
+			w.Header().Set("Retry-After", "60")
 		}
-		if usageInjected && resp.StatusCode == http.StatusBadRequest {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-			resp.Body.Close()
-			attemptBody = chatBody
-			usageInjected = false
-			continue
-		}
-		if isRetryableStatus(resp.StatusCode) && i < len(attempts)-1 {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-			resp.Body.Close()
-			lastErr = fmt.Errorf("channel %q: upstream status %d", c.Name, resp.StatusCode)
-			i++
-			continue
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			// 上游错误原样透传（与 chat 路径一致），不转换格式
-			defer resp.Body.Close()
-			if ct := resp.Header.Get("Content-Type"); ct != "" {
-				w.Header().Set("Content-Type", ct)
-			}
-			w.WriteHeader(resp.StatusCode)
-			_, _ = io.Copy(w, resp.Body)
-			p.logRequest(ak, c, "responses", in.Model, resp.StatusCode,
-				time.Since(start), time.Since(start), tokenUsage{}, "")
-			return
-		}
-		if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-			p.respondResponsesStream(w, ak, c, &in, resp, start)
-			return
-		}
-		p.respondResponsesJSON(w, ak, c, &in, resp, start)
+		writeJSON(w, code, map[string]string{"error": msg})
 		return
 	}
 
-	if lastErr != nil {
-		log.Printf("proxy responses %s failed: %v", in.Model, lastErr)
+	start := time.Now()
+	// 流式请求补 stream_options.include_usage；上游 400 时对同渠道同密钥去掉重试一次
+	ab := &attemptBodies{current: chatBody, plain: chatBody}
+	if in.Stream {
+		if b, ok := injectStreamUsage(chatBody); ok {
+			ab.current = b
+			ab.injected = true
+		}
 	}
-	writeJSON(w, http.StatusBadGateway, map[string]string{"error": "all channels failed"})
-	p.logRequest(ak, nil, "responses", in.Model, http.StatusBadGateway,
-		time.Since(start), time.Since(start), tokenUsage{}, errMsg(lastErr))
+	resp, c, _, lastErr := p.dispatch(r, chans, "/chat/completions", ab, in.Model)
+	if resp == nil {
+		if lastErr != nil {
+			log.Printf("proxy responses %s failed: %v", in.Model, lastErr)
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "all channels failed"})
+		p.logRequest(ak, nil, "responses", in.Model, http.StatusBadGateway,
+			time.Since(start), time.Since(start), tokenUsage{}, errMsg(lastErr))
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		// 上游错误原样透传（与 chat 路径一致），不转换格式
+		defer resp.Body.Close()
+		if ct := resp.Header.Get("Content-Type"); ct != "" {
+			w.Header().Set("Content-Type", ct)
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+		p.logRequest(ak, c, "responses", in.Model, resp.StatusCode,
+			time.Since(start), time.Since(start), tokenUsage{}, "")
+		return
+	}
+	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		p.respondResponsesStream(w, ak, c, &in, resp, start)
+		return
+	}
+	p.respondResponsesJSON(w, ak, c, &in, resp, start)
 }
 
 // serveResponsesStored 网关无状态：对已存 Responses 对象的取回/删除明确报 501。
@@ -867,14 +846,17 @@ func (p *proxy) serveCountTokens(w http.ResponseWriter, r *http.Request) {
 		chans = enabledOnly(chans)
 		chans = filterByModel(chans, req.Model)
 		if len(chans) > 0 {
-			if resp, err := p.attemptUpstream(r, &chans[0], "/messages/count_tokens", body); err == nil {
-				defer resp.Body.Close()
-				if ct := resp.Header.Get("Content-Type"); ct != "" {
-					w.Header().Set("Content-Type", ct)
+			keys := p.keys.available(&chans[0], time.Now())
+			if len(keys) > 0 {
+				if resp, err := p.attemptUpstream(r, &chans[0], keys[0].Key, "/messages/count_tokens", body); err == nil {
+					defer resp.Body.Close()
+					if ct := resp.Header.Get("Content-Type"); ct != "" {
+						w.Header().Set("Content-Type", ct)
+					}
+					w.WriteHeader(resp.StatusCode)
+					_, _ = io.Copy(w, resp.Body)
+					return
 				}
-				w.WriteHeader(resp.StatusCode)
-				_, _ = io.Copy(w, resp.Body)
-				return
 			}
 		}
 	}

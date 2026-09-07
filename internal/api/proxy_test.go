@@ -26,7 +26,7 @@ func mustCreateChannel(t *testing.T, st *store.Store, typ, base string, models [
 	t.Helper()
 	id, err := st.CreateChannel(&store.Channel{
 		Name: "ch-" + typ + "-" + base, Type: typ, BaseURL: base,
-		APIKey: "up-key", Models: models, Weight: 1, Priority: priority, Enabled: true,
+		APIKeys: []store.ChannelKey{{Key: "up-key"}}, Models: models, Weight: 1, Priority: priority, Enabled: true,
 	})
 	if err != nil {
 		t.Fatalf("create channel: %v", err)
@@ -36,8 +36,8 @@ func mustCreateChannel(t *testing.T, st *store.Store, typ, base string, models [
 
 func mustCreateKey(t *testing.T, st *store.Store) string {
 	t.Helper()
-	k, err := st.CreateAPIKey("test", nil)
-	if err != nil {
+	k := &store.APIKey{Name: "test"}
+	if err := st.CreateAPIKey(k); err != nil {
 		t.Fatalf("create key: %v", err)
 	}
 	return k.Key
@@ -286,8 +286,8 @@ func TestChannelKeyMasking(t *testing.T) {
 	if strings.Contains(body, "up-key") {
 		t.Fatalf("channel api_key leaked: %s", body)
 	}
-	// "up-key" 长度 ≤ 8，应整体打码
-	if !strings.Contains(body, `"api_key":"******"`) {
+	// "up-key" 长度 ≤ 8，应整体打码（新版结构：api_keys 数组内每把 key 一个 masked）
+	if !strings.Contains(body, `"masked":"******"`) {
 		t.Fatalf("masked key missing: %s", body)
 	}
 	_ = key

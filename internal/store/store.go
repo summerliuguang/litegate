@@ -33,12 +33,22 @@ CREATE TABLE IF NOT EXISTS channels (
 	api_key    TEXT NOT NULL DEFAULT '',
 	models     TEXT NOT NULL DEFAULT '[]',
 	disabled_models TEXT NOT NULL DEFAULT '[]',
+	model_map  TEXT NOT NULL DEFAULT '{}',
 	weight     INTEGER NOT NULL DEFAULT 1,
 	priority   INTEGER NOT NULL DEFAULT 0,
 	enabled    INTEGER NOT NULL DEFAULT 1,
 	remark     TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS channel_keys (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	channel_id INTEGER NOT NULL,
+	key_enc    TEXT NOT NULL,
+	enabled    INTEGER NOT NULL DEFAULT 1,
+	sort       INTEGER NOT NULL DEFAULT 0,
+	created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_channel_keys_channel ON channel_keys(channel_id);
 CREATE TABLE IF NOT EXISTS api_keys (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
 	key        TEXT NOT NULL UNIQUE,
@@ -46,8 +56,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
 	allowed_models  TEXT NOT NULL DEFAULT '[]',
 	enabled    INTEGER NOT NULL DEFAULT 1,
 	created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS request_logs (
+);CREATE TABLE IF NOT EXISTS request_logs (
 	id                INTEGER PRIMARY KEY AUTOINCREMENT,
 	ts                TEXT NOT NULL DEFAULT (datetime('now')),
 	api_key_id        INTEGER NOT NULL DEFAULT 0,
@@ -135,12 +144,57 @@ func migrate(db *sql.DB) error {
 		{"request_logs", "cache_tokens", `ALTER TABLE request_logs ADD COLUMN cache_tokens INTEGER NOT NULL DEFAULT 0`},
 		{"request_logs", "ttfb_ms", `ALTER TABLE request_logs ADD COLUMN ttfb_ms INTEGER NOT NULL DEFAULT 0`},
 		{"channels", "disabled_models", `ALTER TABLE channels ADD COLUMN disabled_models TEXT NOT NULL DEFAULT '[]'`},
+		{"channels", "model_map", `ALTER TABLE channels ADD COLUMN model_map TEXT NOT NULL DEFAULT '{}'`},
 		{"api_keys", "allowed_models", `ALTER TABLE api_keys ADD COLUMN allowed_models TEXT NOT NULL DEFAULT '[]'`},
+		{"api_keys", "expires_at", `ALTER TABLE api_keys ADD COLUMN expires_at TEXT NOT NULL DEFAULT ''`},
+		{"api_keys", "rpm_limit", `ALTER TABLE api_keys ADD COLUMN rpm_limit INTEGER NOT NULL DEFAULT 0`},
+		{"api_keys", "tpm_limit", `ALTER TABLE api_keys ADD COLUMN tpm_limit INTEGER NOT NULL DEFAULT 0`},
+		{"api_keys", "budget_usd", `ALTER TABLE api_keys ADD COLUMN budget_usd REAL NOT NULL DEFAULT 0`},
+		{"api_keys", "budget_period", `ALTER TABLE api_keys ADD COLUMN budget_period TEXT NOT NULL DEFAULT 'daily'`},
+		{"api_keys", "budget_tokens", `ALTER TABLE api_keys ADD COLUMN budget_tokens INTEGER NOT NULL DEFAULT 0`},
 	} {
 		if !have[m.table+"."+m.col] {
 			if _, err := db.Exec(m.ddl); err != nil {
 				return fmt.Errorf("add column %s.%s: %w", m.table, m.col, err)
 			}
+		}
+	}
+	return migrateLegacyChannelKeys(db)
+}
+
+// migrateLegacyChannelKeys 一次性把旧库的单渠道密钥（channels.api_key）搬进
+// channel_keys 表；以 NOT EXISTS 保证幂等，迁移后旧列保留但不再使用。
+func migrateLegacyChannelKeys(db *sql.DB) error {
+	rows, err := db.Query(
+		`SELECT c.id, c.api_key FROM channels c
+		 WHERE c.api_key != '' AND NOT EXISTS(
+		     SELECT 1 FROM channel_keys k WHERE k.channel_id = c.id)`)
+	if err != nil {
+		return err
+	}
+	type legacy struct {
+		id  int64
+		enc string
+	}
+	var olds []legacy
+	for rows.Next() {
+		var l legacy
+		if err := rows.Scan(&l.id, &l.enc); err != nil {
+			rows.Close()
+			return err
+		}
+		olds = append(olds, l)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, l := range olds {
+		if _, err := db.Exec(
+			`INSERT INTO channel_keys(channel_id, key_enc, enabled, sort) VALUES(?, ?, 1, 0)`,
+			l.id, l.enc); err != nil {
+			return err
 		}
 	}
 	return nil

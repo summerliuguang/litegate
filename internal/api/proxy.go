@@ -24,6 +24,8 @@ type proxy struct {
 	client *http.Client
 	cache  modelsCache
 	pc     priceCache
+	keys   *keyHealthManager
+	limits *keyAdmission
 }
 
 // priceCache 缓存价格表 60s，避免每笔请求都查一次库（SQLite 是单连接串行化）。
@@ -72,7 +74,7 @@ func (p *proxy) serveAnthropic(w http.ResponseWriter, r *http.Request) {
 	p.serve(w, r, "anthropic", strings.TrimPrefix(r.URL.Path, "/v1"))
 }
 
-// serve 是数据面主流程：鉴权 → 选渠道 → 带故障转移地转发 → 回写响应并记日志。
+// serve 是数据面主流程：鉴权 → 准入 → 选渠道 → 带故障转移地转发 → 回写响应并记日志。
 func (p *proxy) serve(w http.ResponseWriter, r *http.Request, protocol, upstreamPath string) {
 	ak, err := p.authenticate(r)
 	if err != nil {
@@ -85,16 +87,6 @@ func (p *proxy) serve(w http.ResponseWriter, r *http.Request, protocol, upstream
 		return
 	}
 	model := jsonModel(body)
-
-	// openai 流式请求补 stream_options.include_usage 以获取 usage；上游不识别时回退重试
-	attemptBody := body
-	usageInjected := false
-	if protocol == "openai" {
-		if b, ok := injectStreamUsage(body); ok {
-			attemptBody = b
-			usageInjected = true
-		}
-	}
 
 	chans, err := p.st.ListChannels(protocol)
 	if err != nil {
@@ -113,50 +105,142 @@ func (p *proxy) serve(w http.ResponseWriter, r *http.Request, protocol, upstream
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "model not allowed for this api key: " + model})
 		return
 	}
-
-	start := time.Now()
-	attempts := orderCandidates(chans)
-	if len(attempts) > 3 {
-		attempts = attempts[:3]
-	}
-
-	var lastErr error
-	i := 0
-	for i < len(attempts) {
-		c := &attempts[i]
-		resp, err := p.attemptUpstream(r, c, upstreamPath, attemptBody)
-		if err != nil {
-			lastErr = fmt.Errorf("channel %q: %w", c.Name, err)
-			i++
-			continue
+	// 准入控制：过期 / RPM/TPM 限速 / 日月预算
+	if code, msg := p.limits.admit(ak); code != 0 {
+		if code == http.StatusTooManyRequests {
+			w.Header().Set("Retry-After", "60")
 		}
-		if usageInjected && resp.StatusCode == http.StatusBadRequest {
-			// 上游不识别 stream_options.include_usage：去掉该字段对同一渠道重试一次
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-			resp.Body.Close()
-			attemptBody = body
-			usageInjected = false
-			continue
-		}
-		if isRetryableStatus(resp.StatusCode) && i < len(attempts)-1 {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-			resp.Body.Close()
-			lastErr = fmt.Errorf("channel %q: upstream status %d", c.Name, resp.StatusCode)
-			i++
-			continue
-		}
-		p.respond(w, ak, c, protocol, model, resp, start)
+		writeJSON(w, code, map[string]string{"error": msg})
 		return
 	}
 
-	status := http.StatusBadGateway
-	msg := "all channels failed"
-	// 对下游只给通用错误：渠道名/上游地址等细节留给服务端日志，防止虚拟密钥持有者探测内部拓扑
-	if lastErr != nil {
-		log.Printf("proxy %s %s failed: %v", r.Method, upstreamPath, lastErr)
+	start := time.Now()
+	// openai 流式请求补 stream_options.include_usage 以获取 usage；上游不识别时回退重试
+	ab := &attemptBodies{current: body, plain: body}
+	if protocol == "openai" {
+		if b, ok := injectStreamUsage(body); ok {
+			ab.current = b
+			ab.injected = true
+		}
 	}
-	writeJSON(w, status, map[string]string{"error": msg})
-	p.logRequest(ak, nil, protocol, model, status, time.Since(start), time.Since(start), tokenUsage{}, errMsg(lastErr))
+	resp, c, _, lastErr := p.dispatch(r, chans, upstreamPath, ab, model)
+	if resp == nil {
+		// 对下游只给通用错误：渠道名/上游地址等细节留给服务端日志，防止虚拟密钥持有者探测内部拓扑
+		if lastErr != nil {
+			log.Printf("proxy %s %s failed: %v", r.Method, upstreamPath, lastErr)
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "all channels failed"})
+		p.logRequest(ak, nil, protocol, model, http.StatusBadGateway, time.Since(start), time.Since(start), tokenUsage{}, errMsg(lastErr))
+		return
+	}
+	p.respond(w, ak, c, protocol, model, resp, start)
+}
+
+const maxProxyAttempts = 4
+
+// attemptBodies 是尝试过程中的请求体：current 可能带注入的 stream_options，
+// plain 为原始体；上游 400 不识别时回退 plain 重试。
+type attemptBodies struct {
+	current  []byte
+	plain    []byte
+	injected bool
+}
+
+// dispatch 是数据面统一的转发决策：渠道候选按优先级/权重排序依次尝试；渠道内
+// 在健康密钥间轮换，失败即上报冷却。规则：
+//   - 多 key 渠道把 401/403 视为密钥问题换 key 重试；单 key 保持透传（配置错误应可见）
+//   - 其余可重试状态（408/429/5xx）按既有语义故障转移
+//   - 总尝试次数封顶 maxProxyAttempts，避免长链拖高延迟
+//
+// resp == nil 表示全部尝试失败；lastErr 只进服务端日志。
+func (p *proxy) dispatch(r *http.Request, chans []store.Channel, path string, ab *attemptBodies, model string) (*http.Response, *store.Channel, *store.ChannelKey, error) {
+	attempts := orderCandidates(chans)
+	if len(attempts) > maxProxyAttempts {
+		attempts = attempts[:maxProxyAttempts]
+	}
+	var lastErr error
+	used := 0
+	for i := range attempts {
+		c := &attempts[i]
+		keys := p.keys.available(c, time.Now())
+		if len(keys) == 0 {
+			continue
+		}
+		enabledKeys := 0
+		for _, k := range c.APIKeys {
+			if k.Enabled {
+				enabledKeys++
+			}
+		}
+		for ki := range keys {
+			k := &keys[ki]
+			if used >= maxProxyAttempts {
+				return nil, nil, nil, lastErr
+			}
+			used++
+			resp, err := p.attemptUpstream(r, c, k.Key, path, rewriteModel(ab.current, c, model))
+			if err != nil {
+				lastErr = fmt.Errorf("channel %q: %w", c.Name, err)
+				p.keys.reportFailure(c.ID, k.ID)
+				continue
+			}
+			if ab.injected && resp.StatusCode == http.StatusBadRequest {
+				// 上游不识别 stream_options.include_usage：去掉该字段对同渠道同密钥重试一次
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+				resp.Body.Close()
+				ab.current, ab.injected = ab.plain, false
+				resp, err = p.attemptUpstream(r, c, k.Key, path, rewriteModel(ab.current, c, model))
+				if err != nil {
+					lastErr = fmt.Errorf("channel %q: %w", c.Name, err)
+					p.keys.reportFailure(c.ID, k.ID)
+					continue
+				}
+			}
+			spare := ki < len(keys)-1 || i < len(attempts)-1
+			if shouldRotate(resp.StatusCode, enabledKeys > 1) && spare {
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+				resp.Body.Close()
+				lastErr = fmt.Errorf("channel %q: upstream status %d", c.Name, resp.StatusCode)
+				p.keys.reportFailure(c.ID, k.ID)
+				continue
+			}
+			p.keys.reportSuccess(c.ID, k.ID)
+			return resp, c, k, nil
+		}
+	}
+	return nil, nil, nil, lastErr
+}
+
+// shouldRotate 决定响应是否应换 key/渠道：多 key 时 401/403 也视为密钥问题；
+// 单 key 保持原语义，401/403/400 作为确定性失败透传。
+func shouldRotate(code int, multiKey bool) bool {
+	if multiKey && (code == http.StatusUnauthorized || code == http.StatusForbidden) {
+		return true
+	}
+	return isRetryableStatus(code)
+}
+
+// rewriteModel 按渠道的模型映射把对外模型名改写为上游真实名；无映射原样透传。
+func rewriteModel(body []byte, c *store.Channel, model string) []byte {
+	if model == "" || len(c.ModelMap) == 0 {
+		return body
+	}
+	real := c.UpstreamModel(model)
+	if real == model {
+		return body
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var v map[string]any
+	if dec.Decode(&v) != nil || v == nil {
+		return body
+	}
+	v["model"] = real
+	out, err := json.Marshal(v)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 // errMsg 返回内部错误的安全摘要（截断，供日志表使用）。
@@ -182,7 +266,7 @@ func enabledOnly(chans []store.Channel) []store.Channel {
 	return out
 }
 
-func (p *proxy) attemptUpstream(r *http.Request, c *store.Channel, path string, body []byte) (*http.Response, error) {
+func (p *proxy) attemptUpstream(r *http.Request, c *store.Channel, key, path string, body []byte) (*http.Response, error) {
 	upstream := c.BaseURL + path
 	if r.URL.RawQuery != "" {
 		// 客户端查询串原样透传（如 Azure 的 api-version、beta 开关）
@@ -192,7 +276,7 @@ func (p *proxy) attemptUpstream(r *http.Request, c *store.Channel, path string, 
 	if err != nil {
 		return nil, err
 	}
-	setUpstreamHeaders(req, r, c)
+	setUpstreamHeaders(req, r, c, key)
 	return p.client.Do(req)
 }
 
@@ -244,7 +328,7 @@ func (p *proxy) authenticate(r *http.Request) (*store.APIKey, error) {
 // passthroughHeaders 需要原样转发给上游的功能性请求头（白名单制，防止客户端伪造计费/身份头）。
 var passthroughHeaders = []string{"Anthropic-Beta", "OpenAI-Beta", "X-Stainless-Lang", "X-Stainless-Package-Version"}
 
-func setUpstreamHeaders(req *http.Request, inbound *http.Request, c *store.Channel) {
+func setUpstreamHeaders(req *http.Request, inbound *http.Request, c *store.Channel, key string) {
 	ct := inbound.Header.Get("Content-Type")
 	if ct == "" {
 		ct = "application/json"
@@ -258,14 +342,14 @@ func setUpstreamHeaders(req *http.Request, inbound *http.Request, c *store.Chann
 	}
 	switch c.Type {
 	case "anthropic":
-		req.Header.Set("X-Api-Key", c.APIKey)
+		req.Header.Set("X-Api-Key", key)
 		v := inbound.Header.Get("Anthropic-Version")
 		if v == "" {
 			v = "2023-06-01"
 		}
 		req.Header.Set("Anthropic-Version", v)
 	default:
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		req.Header.Set("Authorization", "Bearer "+key)
 	}
 }
 
@@ -394,11 +478,13 @@ func (p *proxy) logRequest(ak *store.APIKey, c *store.Channel, protocol, model s
 	if u.prompt > 0 || u.completion > 0 {
 		price = p.lookupPrice(model)
 	}
+	cost := store.CostOf(price, u.prompt, u.cacheRead, u.cacheWrite, u.completion)
+	p.limits.record(ak, u.prompt, u.completion, cost)
 	l := &store.RequestLog{
 		Model: model, Protocol: protocol, Status: status,
 		LatencyMs: total.Milliseconds(), TtfbMs: ttfb.Milliseconds(),
 		PromptTokens: u.prompt, CompletionTokens: u.completion, CacheTokens: u.cacheRead,
-		CostUSD: store.CostOf(price, u.prompt, u.cacheRead, u.cacheWrite, u.completion),
+		CostUSD: cost,
 		Error:   errMsg,
 	}
 	if ak != nil {

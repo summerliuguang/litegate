@@ -98,7 +98,7 @@ function esc(s) {
 function toast(msg, ok = true) {
   const el = document.createElement('div');
   el.className = 'notification ' + (ok ? 'is-success' : 'is-danger');
-  el.style.cssText = 'position:fixed;top:1rem;right:1rem;z-index:50;max-width:380px;padding:.8rem 1rem';
+  el.style.cssText = 'position:fixed;top:1rem;right:1rem;z-index:50;max-width:380px;padding:.8rem 1rem;white-space:pre-line';
   el.textContent = msg;
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 3000);

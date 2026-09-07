@@ -35,6 +35,8 @@ func (a *admin) register(mux *http.ServeMux) {
 	mux.Handle("PUT /api/admin/channels/{id}", a.auth(a.updateChannel))
 	mux.Handle("DELETE /api/admin/channels/{id}", a.auth(a.deleteChannel))
 	mux.Handle("POST /api/admin/channels/{id}/test", a.auth(a.testChannel))
+	mux.Handle("POST /api/admin/channels/{id}/keys/{key_id}/enable", a.auth(a.enableChannelKey))
+	mux.Handle("POST /api/admin/channels/{id}/keys/{key_id}/disable", a.auth(a.disableChannelKey))
 	mux.Handle("POST /api/admin/channels/{id}/models/disable/{model...}", a.auth(a.disableChannelModel))
 	mux.Handle("POST /api/admin/channels/{id}/models/enable/{model...}", a.auth(a.enableChannelModel))
 	mux.Handle("GET /api/admin/keys", a.auth(a.listKeys))
@@ -135,18 +137,23 @@ func (a *admin) dashboard(w http.ResponseWriter, _ *http.Request) {
 // ---- 渠道管理 ----
 
 type channelIn struct {
-	Name     string   `json:"name"`
-	Type     string   `json:"type"`
-	BaseURL  string   `json:"base_url"`
-	APIKey   string   `json:"api_key"`
-	Models   []string `json:"models"`
+	Name    string   `json:"name"`
+	Type    string   `json:"type"`
+	BaseURL string   `json:"base_url"`
+	// APIKeys 是渠道的上游密钥列表（明文），保存时加密。create 必填（可空串）；
+	// update 传 nil 表示密钥不动，传数组（含空数组）表示全量替换（启停状态按密钥保留）。
+	APIKeys []string `json:"api_keys"`
+	// APIKey 是旧版单密钥字段的兼容入口：仅当 api_keys 未传且 api_key 非空时生效。
+	APIKey  string            `json:"api_key"`
+	Models  []string          `json:"models"`
 	// DisabledModels 可选：显式指定禁用列表（批量导入场景全量替换）。
 	// 不传（nil）时按"移出启用列表即禁用"的规则自动推导。
-	DisabledModels *[]string `json:"disabled_models"`
-	Weight   int      `json:"weight"`
-	Priority int      `json:"priority"`
-	Enabled  *bool    `json:"enabled"`
-	Remark   string   `json:"remark"`
+	DisabledModels *[]string        `json:"disabled_models"`
+	ModelMap       map[string]string `json:"model_map"` // 模型映射：对外名 → 上游真实名
+	Weight         int               `json:"weight"`
+	Priority       int               `json:"priority"`
+	Enabled        *bool             `json:"enabled"`
+	Remark         string            `json:"remark"`
 }
 
 func (in *channelIn) validate() string {
@@ -162,37 +169,46 @@ func (in *channelIn) validate() string {
 	return ""
 }
 
-// channelOut 是渠道的对外视图：api_key 打码，避免明文回显。
-type channelOut struct {
-	ID             int64    `json:"id"`
-	Name           string   `json:"name"`
-	Type           string   `json:"type"`
-	BaseURL        string   `json:"base_url"`
-	APIKey         string   `json:"api_key"`
-	Models         []string `json:"models"`
-	DisabledModels []string `json:"disabled_models"`
-	Weight         int      `json:"weight"`
-	Priority       int      `json:"priority"`
-	Enabled        bool     `json:"enabled"`
-	Remark         string   `json:"remark"`
-	CreatedAt      string   `json:"created_at"`
+// keyInputs 把入参归一为密钥明文列表：兼容旧版单 api_key 字段。
+func (in *channelIn) keyInputs() []string {
+	if len(in.APIKeys) > 0 {
+		return in.APIKeys
+	}
+	if in.APIKey != "" {
+		return []string{in.APIKey}
+	}
+	if in.APIKeys != nil {
+		return []string{}
+	}
+	return nil
 }
 
-func maskKey(k string) string {
-	if k == "" {
-		return ""
-	}
-	if len(k) <= 8 {
-		return strings.Repeat("*", len(k))
-	}
-	return k[:4] + "****" + k[len(k)-4:]
+// channelOut 是渠道的对外视图：密钥只回打码值，避免明文回显。
+type channelOut struct {
+	ID             int64               `json:"id"`
+	Name           string              `json:"name"`
+	Type           string              `json:"type"`
+	BaseURL        string              `json:"base_url"`
+	APIKeys        []store.ChannelKey  `json:"api_keys"`
+	Models         []string            `json:"models"`
+	DisabledModels []string            `json:"disabled_models"`
+	ModelMap       map[string]string   `json:"model_map"`
+	Weight         int                 `json:"weight"`
+	Priority       int                 `json:"priority"`
+	Enabled        bool                `json:"enabled"`
+	Remark         string              `json:"remark"`
+	CreatedAt      string              `json:"created_at"`
 }
 
 func maskChannel(c *store.Channel) channelOut {
+	keys := make([]store.ChannelKey, 0, len(c.APIKeys))
+	for _, k := range c.APIKeys {
+		keys = append(keys, store.ChannelKey{ID: k.ID, Masked: store.MaskKey(k.Key), Enabled: k.Enabled})
+	}
 	return channelOut{
 		ID: c.ID, Name: c.Name, Type: c.Type, BaseURL: c.BaseURL,
-		APIKey: maskKey(c.APIKey), Models: c.Models, DisabledModels: c.DisabledModels,
-		Weight: c.Weight, Priority: c.Priority, Enabled: c.Enabled,
+		APIKeys: keys, Models: c.Models, DisabledModels: c.DisabledModels,
+		ModelMap: c.ModelMap, Weight: c.Weight, Priority: c.Priority, Enabled: c.Enabled,
 		Remark: c.Remark, CreatedAt: c.CreatedAt,
 	}
 }
@@ -227,9 +243,14 @@ func (a *admin) createChannel(w http.ResponseWriter, r *http.Request) {
 	if in.DisabledModels != nil {
 		disabled = *in.DisabledModels
 	}
+	var keys []store.ChannelKey
+	for _, k := range in.keyInputs() {
+		keys = append(keys, store.ChannelKey{Key: k})
+	}
 	id, err := a.st.CreateChannel(&store.Channel{
-		Name: in.Name, Type: in.Type, BaseURL: in.BaseURL, APIKey: in.APIKey,
-		Models: in.Models, DisabledModels: disabled, Weight: in.Weight, Priority: in.Priority,
+		Name: in.Name, Type: in.Type, BaseURL: in.BaseURL, APIKeys: keys,
+		Models: in.Models, DisabledModels: disabled, ModelMap: in.ModelMap,
+		Weight: in.Weight, Priority: in.Priority,
 		Enabled: enabled, Remark: in.Remark,
 	})
 	if err != nil {
@@ -255,9 +276,16 @@ func (a *admin) updateChannel(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 		return
 	}
-	// api_key 留空表示沿用原凭证
-	if in.APIKey == "" {
-		in.APIKey = old.APIKey
+	// 密钥：入参未传 api_keys（且未用旧版 api_key）表示沿用原密钥；传了则全量替换
+	//（替换时存储层按明文保留各密钥的启停状态）。
+	inKeys := in.keyInputs()
+	var newKeys []store.ChannelKey
+	if inKeys != nil {
+		for _, k := range inKeys {
+			newKeys = append(newKeys, store.ChannelKey{Key: k})
+		}
+	} else {
+		newKeys = old.APIKeys
 	}
 	enabled := old.Enabled
 	if in.Enabled != nil {
@@ -284,8 +312,9 @@ func (a *admin) updateChannel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	err = a.st.UpdateChannel(&store.Channel{
-		ID: id, Name: in.Name, Type: in.Type, BaseURL: in.BaseURL, APIKey: in.APIKey,
-		Models: in.Models, DisabledModels: newDisabled, Weight: in.Weight, Priority: in.Priority,
+		ID: id, Name: in.Name, Type: in.Type, BaseURL: in.BaseURL, APIKeys: newKeys,
+		Models: in.Models, DisabledModels: newDisabled, ModelMap: in.ModelMap,
+		Weight: in.Weight, Priority: in.Priority,
 		Enabled: enabled, Remark: in.Remark, CreatedAt: old.CreatedAt,
 	})
 	if err != nil {
@@ -356,12 +385,46 @@ func (a *admin) testChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	n, err := fetchUpstreamModels(ctx, upstreamClientForTest, c)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+	type keyResult struct {
+		Masked string `json:"masked"`
+		OK     bool   `json:"ok"`
+		Models int    `json:"models,omitempty"`
+		Error  string `json:"error,omitempty"`
+	}
+	keys := c.APIKeys
+	results := make([]keyResult, 0, len(keys))
+	okAll := len(keys) > 0
+	for _, k := range keys {
+		res := keyResult{Masked: store.MaskKey(k.Key)}
+		n, err := fetchFromChannel(ctx, upstreamClientForTest, c, k.Key)
+		if err != nil {
+			res.Error = err.Error()
+			okAll = false
+		} else {
+			res.OK = true
+			res.Models = len(n)
+		}
+		results = append(results, res)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": okAll, "keys": results})
+}
+
+// enableChannelKey / disableChannelKey 手动启停渠道上的单把密钥。
+func (a *admin) enableChannelKey(w http.ResponseWriter, r *http.Request) {
+	a.setChannelKey(w, r, true)
+}
+
+func (a *admin) disableChannelKey(w http.ResponseWriter, r *http.Request) {
+	a.setChannelKey(w, r, false)
+}
+
+func (a *admin) setChannelKey(w http.ResponseWriter, r *http.Request, enabled bool) {
+	keyID, _ := strconv.ParseInt(r.PathValue("key_id"), 10, 64)
+	if err := a.st.SetChannelKeyEnabled(keyID, enabled); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "channel key not found"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": n})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // ---- 虚拟密钥管理 ----
@@ -384,6 +447,12 @@ type apiKeyOut struct {
 	AllowedModels []string `json:"allowed_models"`
 	Enabled       bool     `json:"enabled"`
 	CreatedAt     string   `json:"created_at"`
+	ExpiresAt     string   `json:"expires_at"`
+	RPMLimit      int64    `json:"rpm_limit"`
+	TPMLimit      int64    `json:"tpm_limit"`
+	BudgetUSD     float64  `json:"budget_usd"`
+	BudgetPeriod  string   `json:"budget_period"`
+	BudgetTokens  int64    `json:"budget_tokens"`
 }
 
 func (a *admin) listKeys(w http.ResponseWriter, _ *http.Request) {
@@ -394,9 +463,12 @@ func (a *admin) listKeys(w http.ResponseWriter, _ *http.Request) {
 	}
 	out := make([]apiKeyOut, 0, len(keys))
 	for i := range keys {
+		k := &keys[i]
 		out = append(out, apiKeyOut{
-			ID: keys[i].ID, Key: maskApiKey(keys[i].Key), Name: keys[i].Name,
-			AllowedModels: keys[i].AllowedModels, Enabled: keys[i].Enabled, CreatedAt: keys[i].CreatedAt,
+			ID: k.ID, Key: maskApiKey(k.Key), Name: k.Name,
+			AllowedModels: k.AllowedModels, Enabled: k.Enabled, CreatedAt: k.CreatedAt,
+			ExpiresAt: k.ExpiresAt, RPMLimit: k.RPMLimit, TPMLimit: k.TPMLimit,
+			BudgetUSD: k.BudgetUSD, BudgetPeriod: k.BudgetPeriod, BudgetTokens: k.BudgetTokens,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -413,28 +485,44 @@ func (a *admin) revealKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"key": k.Key})
 }
 
+// keyLimitsIn 是虚拟密钥的治理字段（过期 / 限速 / 预算）；0/空 = 不限制。
+type keyLimitsIn struct {
+	ExpiresAt    string  `json:"expires_at"` // YYYY-MM-DD，当日结束失效
+	RPMLimit     int64   `json:"rpm_limit"`
+	TPMLimit     int64   `json:"tpm_limit"`
+	BudgetUSD    float64 `json:"budget_usd"`
+	BudgetPeriod string  `json:"budget_period"` // daily | monthly
+	BudgetTokens int64   `json:"budget_tokens"`
+}
+
 func (a *admin) createKey(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name          string   `json:"name"`
 		AllowedModels []string `json:"allowed_models"`
+		keyLimitsIn
 	}
 	if readJSON(w, r, &req) != nil {
 		return
 	}
-	k, err := a.st.CreateAPIKey(req.Name, req.AllowedModels)
-	if err != nil {
+	k := &store.APIKey{
+		Name: req.Name, AllowedModels: req.AllowedModels, Enabled: true,
+		ExpiresAt: req.ExpiresAt, RPMLimit: req.RPMLimit, TPMLimit: req.TPMLimit,
+		BudgetUSD: req.BudgetUSD, BudgetPeriod: req.BudgetPeriod, BudgetTokens: req.BudgetTokens,
+	}
+	if err := a.st.CreateAPIKey(k); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, k)
 }
 
-// updateKey 更新密钥的名称与模型限制（全量替换；allowed_models 留空 = 不限制）。
+// updateKey 更新密钥的名称、模型限制与治理字段（全量替换；allowed_models 留空 = 不限制）。
 func (a *admin) updateKey(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	var req struct {
 		Name          string   `json:"name"`
 		AllowedModels []string `json:"allowed_models"`
+		keyLimitsIn
 	}
 	if readJSON(w, r, &req) != nil {
 		return
@@ -443,7 +531,12 @@ func (a *admin) updateKey(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
 		return
 	}
-	if err := a.st.UpdateAPIKey(id, req.Name, req.AllowedModels); err != nil {
+	k := &store.APIKey{
+		ID: id, Name: req.Name, AllowedModels: req.AllowedModels,
+		ExpiresAt: req.ExpiresAt, RPMLimit: req.RPMLimit, TPMLimit: req.TPMLimit,
+		BudgetUSD: req.BudgetUSD, BudgetPeriod: req.BudgetPeriod, BudgetTokens: req.BudgetTokens,
+	}
+	if err := a.st.UpdateAPIKey(k); err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
 		return
 	}

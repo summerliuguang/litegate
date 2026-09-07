@@ -25,7 +25,11 @@ func NewServer(st *store.Store, adminPassword string, webHandler http.Handler) h
 	p := &proxy{
 		st:     st,
 		client: newUpstreamClient(),
+		keys:   newKeyHealthManager(),
+		limits: newKeyAdmission(),
 	}
+	p.limits.load(st)
+	serverProxy = p
 	p.register(mux)
 
 	a.invalidateModels = p.invalidateModelsCache

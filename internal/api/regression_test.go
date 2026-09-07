@@ -168,7 +168,7 @@ func TestAllChannelsFailErrorIsGeneric(t *testing.T) {
 	// 用带可识别名字的渠道
 	_, err := st.CreateChannel(&store.Channel{
 		Name: "leaky-channel", Type: "openai", BaseURL: upstream.URL + "/" + secretHost,
-		APIKey: "up-key", Models: []string{"m"}, Weight: 1, Priority: 1, Enabled: true,
+		APIKeys: []store.ChannelKey{{Key: "up-key"}}, Models: []string{"m"}, Weight: 1, Priority: 1, Enabled: true,
 	})
 	if err != nil {
 		t.Fatalf("create channel: %v", err)

@@ -22,8 +22,8 @@
   </p>
   <div class="table-container card">
     <table class="table is-fullwidth is-size-7" style="border-radius:12px">
-      <thead><tr><th>ID</th><th>名称</th><th>密钥</th><th>模型限制</th><th>创建时间</th><th style="min-width:220px">操作</th></tr></thead>
-      <tbody id="rows"><tr><td colspan="6" class="has-text-grey">加载中…</td></tr></tbody>
+      <thead><tr><th>ID</th><th>名称</th><th>密钥</th><th>模型限制</th><th>限额 / 预算 / 有效期</th><th>创建时间</th><th style="min-width:220px">操作</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="7" class="has-text-grey">加载中…</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -39,6 +39,25 @@
         <input class="input is-small" id="eName"></div>
       <div class="field"><label class="label is-size-7">允许的模型（每行一个，留空 = 不限制；只能调用各渠道当前启用的模型）</label>
         <textarea class="textarea is-small mono" id="eModels" rows="6" placeholder="deepseek-v4-flash&#10;mimo-v2.5"></textarea></div>
+      <div class="columns" style="margin-bottom:0">
+        <div class="column"><div class="field"><label class="label is-size-7">RPM 限速（次/分钟，0 = 不限）</label>
+          <input class="input is-small" id="eRpm" type="number" min="0" value="0"></div></div>
+        <div class="column"><div class="field"><label class="label is-size-7">TPM 限速（token/分钟，0 = 不限）</label>
+          <input class="input is-small" id="eTpm" type="number" min="0" value="0"></div></div>
+      </div>
+      <div class="columns" style="margin-bottom:0">
+        <div class="column"><div class="field"><label class="label is-size-7">预算（美元，0 = 不限）</label>
+          <input class="input is-small" id="eBudget" type="number" min="0" step="0.01" value="0"></div></div>
+        <div class="column"><div class="field"><label class="label is-size-7">Token 预算（0 = 不限）</label>
+          <input class="input is-small" id="eBudgetTok" type="number" min="0" value="0"></div></div>
+        <div class="column"><div class="field"><label class="label is-size-7">预算周期</label>
+          <div class="control select is-small is-fullwidth"><select id="eBudgetPeriod">
+            <option value="daily">每日</option>
+            <option value="monthly">每月</option>
+          </select></div></div>
+      </div>
+      <div class="field"><label class="label is-size-7">有效期至（留空 = 永久；过期后该密钥返回 401）</label>
+        <input class="input is-small" id="eExpires" type="date"></div>
       <p id="eErr" class="help is-danger" style="min-height:1.2em"></p>
     </section>
     <footer class="modal-card-foot">
@@ -58,18 +77,25 @@ async function load() {
     const keys = keysCache = await api('/api/admin/keys');
     const tb = document.getElementById('rows');
     if (!keys.length) {
-      tb.innerHTML = '<tr><td colspan="6" class="has-text-grey">还没有密钥，上方输入名称签发一个</td></tr>';
+      tb.innerHTML = '<tr><td colspan="7" class="has-text-grey">还没有密钥，上方输入名称签发一个</td></tr>';
       return;
     }
     tb.innerHTML = keys.map(k => {
       const lim = k.allowed_models && k.allowed_models.length
         ? `<span title="${esc(k.allowed_models.join('\n'))}">限 ${k.allowed_models.length} 个模型</span>`
         : '<span class="has-text-grey">全部模型</span>';
+      const limits = [];
+      if (k.rpm_limit) limits.push(k.rpm_limit + ' RPM');
+      if (k.tpm_limit) limits.push(k.tpm_limit + ' TPM');
+      if (k.budget_usd) limits.push('$' + k.budget_usd + '/' + (k.budget_period === 'monthly' ? '月' : '日'));
+      if (k.budget_tokens) limits.push(k.budget_tokens.toLocaleString() + ' tok/' + (k.budget_period === 'monthly' ? '月' : '日'));
+      if (k.expires_at) limits.push('至 ' + k.expires_at);
       return `<tr>
       <td>${k.id}</td>
       <td><b>${esc(k.name)}</b></td>
       <td class="mono" data-keycell="${k.id}" data-shown="0">${esc(k.key)}</td>
       <td>${lim}</td>
+      <td>${limits.length ? esc(limits.join('，')) : '<span class="has-text-grey">不限</span>'}</td>
       <td class="mono">${fmtTs(k.created_at)}</td>
       <td>
         <button class="button is-small" onclick="toggleKey(${k.id})">显示</button>
@@ -137,6 +163,12 @@ window.openEditKey = function (id) {
   editingKeyId = id;
   document.getElementById('eName').value = k.name;
   document.getElementById('eModels').value = (k.allowed_models || []).join('\n');
+  document.getElementById('eRpm').value = k.rpm_limit || 0;
+  document.getElementById('eTpm').value = k.tpm_limit || 0;
+  document.getElementById('eBudget').value = k.budget_usd || 0;
+  document.getElementById('eBudgetTok').value = k.budget_tokens || 0;
+  document.getElementById('eBudgetPeriod').value = k.budget_period === 'monthly' ? 'monthly' : 'daily';
+  document.getElementById('eExpires').value = k.expires_at || '';
   document.getElementById('eErr').textContent = '';
   document.getElementById('editModal').classList.add('is-active');
 };
@@ -151,7 +183,16 @@ document.getElementById('eSave').addEventListener('click', async () => {
   try {
     await api('/api/admin/keys/' + editingKeyId, {
       method: 'PUT',
-      body: JSON.stringify({ name, allowed_models: models }),
+      body: JSON.stringify({
+        name,
+        allowed_models: models,
+        rpm_limit: parseInt(document.getElementById('eRpm').value, 10) || 0,
+        tpm_limit: parseInt(document.getElementById('eTpm').value, 10) || 0,
+        budget_usd: parseFloat(document.getElementById('eBudget').value) || 0,
+        budget_tokens: parseInt(document.getElementById('eBudgetTok').value, 10) || 0,
+        budget_period: document.getElementById('eBudgetPeriod').value,
+        expires_at: document.getElementById('eExpires').value,
+      }),
     });
     closeEdit(); toast('已保存'); load();
   } catch (ex) { document.getElementById('eErr').textContent = ex.message; }

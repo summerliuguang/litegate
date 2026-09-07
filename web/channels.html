@@ -44,8 +44,10 @@
         </select></div></div>
       <div class="field"><label class="label is-size-7">Base URL *</label>
         <input class="input is-small" id="fBase" placeholder="https://api.openai.com/v1"></div>
-      <div class="field"><label class="label is-size-7">API Key <span id="keyHint" class="has-text-grey"></span></label>
-        <input class="input is-small mono" id="fKey" placeholder="sk-…"></div>
+      <div class="field"><label class="label is-size-7">API Keys（每行一个，多把自动轮询；坏 key 自动冷却换下一把）<span id="keyHint" class="has-text-grey"></span></label>
+        <textarea class="textarea is-small mono" id="fKeys" rows="3" placeholder="sk-…（每行一个 key）"></textarea></div>
+      <div class="field"><label class="label is-size-7">模型映射（选填，JSON：{"对外名": "上游真实名"}，客户端无感知用便宜/本地模型）</label>
+        <input class="input is-small mono" id="fMap" placeholder='{"gpt-4o": "deepseek-v4-flash"}'></div>
       <div class="field" id="modelsField">
         <label class="label is-size-7">模型（勾选 = 启用，不勾 = 禁用；全部不勾 = 通配服务任意模型）</label>
         <div class="is-flex" style="gap:.5rem;margin-bottom:.4rem">
@@ -105,7 +107,8 @@ function renderRows() {
       <td><b>${esc(c.name)}</b>${c.remark ? `<br><span class="has-text-grey is-size-7">${esc(c.remark)}</span>` : ''}</td>
       <td><span class="tag is-light">${esc(c.type)}</span></td>
       <td class="mono" style="max-width:220px;word-break:break-all">${esc(c.base_url)}</td>
-      <td class="mono">${esc(c.api_key)}</td>
+      <td class="mono" style="max-width:200px;word-break:break-all">${(c.api_keys || []).map(k =>
+        `<span class="tag is-light is-size-7" style="margin:0 0 .2rem${k.enabled ? '' : ';opacity:.45;text-decoration:line-through'}">${esc(k.masked)}</span>`).join(' ') || '<span class="has-text-grey">无</span>'}</td>
       <td>${c.models && c.models.length ? esc(c.models.slice(0, 3).join(', ')) + (c.models.length > 3 ? ` 等 ${c.models.length} 个` : '') : '<span class="has-text-grey">任意</span>'}${c.disabled_models && c.disabled_models.length ? `<br><span class="has-text-grey is-size-7">已禁用 ${c.disabled_models.length} 个</span>` : ''}</td>
       <td>${c.priority}</td>
       <td>${c.weight}</td>
@@ -128,6 +131,15 @@ function openModal(title, hint) {
   document.getElementById('modal').classList.add('is-active');
 }
 function closeModal() { document.getElementById('modal').classList.remove('is-active'); }
+
+// 模型映射输入框 ↔ 对象
+function readMapInput() {
+  const raw = document.getElementById('fMap').value.trim();
+  if (!raw) return {};
+  const obj = JSON.parse(raw); // 非法 JSON 直接抛错，由保存处提示
+  if (typeof obj !== 'object' || Array.isArray(obj) || obj === null) throw new Error('模型映射必须是 JSON 对象');
+  return obj;
+}
 
 // ---- 勾选式模型管理 ----
 function buildModelState(c) {
@@ -196,7 +208,7 @@ document.getElementById('btnNew').addEventListener('click', () => {
   editingCh = null;
   modelState = new Map();
   modelEditMode = 'checkbox';
-  ['fName', 'fBase', 'fKey', 'fNewModel', 'fModelFilter', 'fRemark'].forEach(id => document.getElementById(id).value = '');
+  ['fName', 'fBase', 'fKeys', 'fMap', 'fNewModel', 'fModelFilter', 'fRemark'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('fType').value = 'openai';
   document.getElementById('fPriority').value = 0;
   document.getElementById('fWeight').value = 1;
@@ -215,7 +227,8 @@ window.openEdit = function (id) {
   document.getElementById('fName').value = c.name;
   document.getElementById('fType').value = c.type;
   document.getElementById('fBase').value = c.base_url;
-  document.getElementById('fKey').value = '';
+  document.getElementById('fKeys').value = '';
+  document.getElementById('fMap').value = c.model_map && Object.keys(c.model_map).length ? JSON.stringify(c.model_map) : '';
   document.getElementById('fPriority').value = c.priority;
   document.getElementById('fWeight').value = c.weight;
   document.getElementById('fRemark').value = c.remark || '';
@@ -224,7 +237,7 @@ window.openEdit = function (id) {
   document.getElementById('fModelFilter').value = '';
   document.getElementById('modelsField').style.display = '';
   renderModelList('');
-  openModal(`编辑渠道 #${id}（${c.name}）`, '留空 = 沿用原密钥');
+  openModal(`编辑渠道 #${id}（${c.name}）`, `已有 ${(c.api_keys || []).length} 把密钥，留空 = 沿用`);
 };
 document.getElementById('mClose').addEventListener('click', closeModal);
 document.getElementById('mCancel').addEventListener('click', closeModal);
@@ -234,18 +247,29 @@ document.getElementById('mSave').addEventListener('click', async () => {
   // 勾选结果：勾选 = 启用模型，未勾 = 禁用模型
   const models = [], disabled = [];
   for (const [m, on] of modelState) (on ? models : disabled).push(m);
+  let map;
+  try { map = readMapInput(); } catch (ex) {
+    document.getElementById('mErr').textContent = '模型映射：' + ex.message;
+    return;
+  }
+  const keysRaw = document.getElementById('fKeys').value.split('\n').map(s => s.trim()).filter(Boolean);
   const body = {
     name: document.getElementById('fName').value.trim(),
     type: document.getElementById('fType').value,
     base_url: document.getElementById('fBase').value.trim(),
-    api_key: document.getElementById('fKey').value.trim(),
+    api_keys: keysRaw,
     models,
     disabled_models: disabled,
+    model_map: map,
     weight: parseInt(document.getElementById('fWeight').value, 10) || 1,
     priority: parseInt(document.getElementById('fPriority').value, 10) || 0,
     enabled: document.getElementById('fEnabled').checked,
     remark: document.getElementById('fRemark').value.trim(),
   };
+  if (!editingId && !keysRaw.length) {
+    document.getElementById('mErr').textContent = '至少填一把上游 API Key';
+    return;
+  }
   try {
     if (editingId == null) await api('/api/admin/channels', { method: 'POST', body: JSON.stringify(body) });
     else await api('/api/admin/channels/' + editingId, { method: 'PUT', body: JSON.stringify(body) });
@@ -256,10 +280,11 @@ document.getElementById('mSave').addEventListener('click', async () => {
 window.testCh = async function (id) {
   toast('正在测试连通性…');
   try {
-    // 该端点恒 200，测试结果在 body.ok
+    // 该端点恒 200，逐密钥结果在 body.keys
     const r = await api(`/api/admin/channels/${id}/test`, { method: 'POST' });
-    if (r.ok) toast(`连通正常，上游模型 ${r.models} 个`);
-    else toast('连通失败：' + (r.error || '未知错误'), false);
+    const parts = (r.keys || []).map(k =>
+      `${k.masked} ${k.ok ? '正常' + (k.models ? `（${k.models} 个模型）` : '') : '失败：' + (k.error || '未知错误')}`);
+    toast(parts.length ? parts.join('\n') : '无密钥可测', r.ok);
   } catch (ex) { toast('测试请求失败：' + ex.message, false); }
 };
 

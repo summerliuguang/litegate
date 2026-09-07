@@ -46,12 +46,14 @@ func main() {
 	defer st.Close()
 
 	if n, err := st.CountAPIKeys(); err == nil && n == 0 {
-		if k, err := st.CreateAPIKey("default", nil); err == nil {
+		k := &store.APIKey{Name: "default"}
+		if err := st.CreateAPIKey(k); err == nil {
 			log.Printf("已生成默认虚拟密钥 %s （下游客户端用它在网关鉴权）", k.Key)
 		}
 	}
 
 	handler := api.NewServer(st, cfg.AdminPassword, web.Handler())
+	api.StartKeyHealthChecker(st, 2*time.Minute)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           handler,

@@ -144,13 +144,8 @@ func (p *proxy) cachedModels() []modelItem {
 	return p.cache.data
 }
 
-func fetchUpstreamModels(ctx context.Context, client *http.Client, c *store.Channel) (int, error) {
-	ids, err := fetchFromChannel(ctx, client, c)
-	return len(ids), err
-}
-
 func fetchChannelModels(ctx context.Context, client *http.Client, c *store.Channel) []string {
-	ids, err := fetchFromChannel(ctx, client, c)
+	ids, err := fetchFromChannel(ctx, client, c, c.FirstKey())
 	if err != nil {
 		return nil
 	}
@@ -158,7 +153,8 @@ func fetchChannelModels(ctx context.Context, client *http.Client, c *store.Chann
 }
 
 // fetchFromChannel 请求 GET {base_url}/models：openai 渠道用 Bearer，anthropic 渠道用 x-api-key。
-func fetchFromChannel(ctx context.Context, client *http.Client, c *store.Channel) ([]string, error) {
+// key 由调用方选择（多 key 渠道按健康状态挑一把）。
+func fetchFromChannel(ctx context.Context, client *http.Client, c *store.Channel, key string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.BaseURL, "/")+"/models", nil)
@@ -167,10 +163,10 @@ func fetchFromChannel(ctx context.Context, client *http.Client, c *store.Channel
 	}
 	switch c.Type {
 	case "anthropic":
-		req.Header.Set("X-Api-Key", c.APIKey)
+		req.Header.Set("X-Api-Key", key)
 		req.Header.Set("Anthropic-Version", "2023-06-01")
 	default:
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
