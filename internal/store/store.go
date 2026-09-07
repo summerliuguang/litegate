@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS channels (
 	base_url   TEXT NOT NULL,
 	api_key    TEXT NOT NULL DEFAULT '',
 	models     TEXT NOT NULL DEFAULT '[]',
+	disabled_models TEXT NOT NULL DEFAULT '[]',
 	weight     INTEGER NOT NULL DEFAULT 1,
 	priority   INTEGER NOT NULL DEFAULT 0,
 	enabled    INTEGER NOT NULL DEFAULT 1,
@@ -42,6 +43,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
 	key        TEXT NOT NULL UNIQUE,
 	name       TEXT NOT NULL DEFAULT '',
+	allowed_models  TEXT NOT NULL DEFAULT '[]',
 	enabled    INTEGER NOT NULL DEFAULT 1,
 	created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -104,34 +106,38 @@ func Open(path string, secret []byte) (*Store, error) {
 
 func (s *Store) Close() error { return s.DB.Close() }
 
-// migrate 为 M1 时期创建的旧库补齐后加的列（SQLite 不支持 ADD COLUMN IF NOT EXISTS）。
+// migrate 为旧库补齐后加的列（SQLite 不支持 ADD COLUMN IF NOT EXISTS）。
 func migrate(db *sql.DB) error {
-	rows, err := db.Query(`PRAGMA table_info(request_logs)`)
-	if err != nil {
-		return err
-	}
 	have := map[string]bool{}
-	for rows.Next() {
-		var cid, notNull, pk int
-		var name, typ string
-		var dflt any
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
-			rows.Close()
+	for _, table := range []string{"request_logs", "channels", "api_keys"} {
+		rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+		if err != nil {
 			return err
 		}
-		have[name] = true
+		for rows.Next() {
+			var cid, notNull, pk int
+			var name, typ string
+			var dflt any
+			if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+				rows.Close()
+				return err
+			}
+			have[table+"."+name] = true
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, m := range []struct{ col, ddl string }{
-		{"cost", `ALTER TABLE request_logs ADD COLUMN cost REAL NOT NULL DEFAULT 0`},
-		{"ttfb_ms", `ALTER TABLE request_logs ADD COLUMN ttfb_ms INTEGER NOT NULL DEFAULT 0`},
+	for _, m := range []struct{ table, col, ddl string }{
+		{"request_logs", "cost", `ALTER TABLE request_logs ADD COLUMN cost REAL NOT NULL DEFAULT 0`},
+		{"request_logs", "ttfb_ms", `ALTER TABLE request_logs ADD COLUMN ttfb_ms INTEGER NOT NULL DEFAULT 0`},
+		{"channels", "disabled_models", `ALTER TABLE channels ADD COLUMN disabled_models TEXT NOT NULL DEFAULT '[]'`},
+		{"api_keys", "allowed_models", `ALTER TABLE api_keys ADD COLUMN allowed_models TEXT NOT NULL DEFAULT '[]'`},
 	} {
-		if !have[m.col] {
+		if !have[m.table+"."+m.col] {
 			if _, err := db.Exec(m.ddl); err != nil {
-				return fmt.Errorf("add column %s: %w", m.col, err)
+				return fmt.Errorf("add column %s.%s: %w", m.table, m.col, err)
 			}
 		}
 	}

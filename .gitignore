@@ -5,3 +5,12 @@
 *.test
 /web/node_modules
 /web/dist
+
+# 敏感信息:管理密码/密钥/本地数据库,严禁提交
+deploy/litegate.env
+.env
+*.env.local
+*.db
+*.db-shm
+*.db-wal
+.mimosa/

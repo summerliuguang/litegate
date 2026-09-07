@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>请求日志 - LiteGate</title>
+<link rel="stylesheet" href="/static/vendor/bulma.min.css">
+<link rel="stylesheet" href="/static/skin.css">
+<link rel="stylesheet" href="/static/admin.css">
+</head>
+<body data-page="logs">
+<div class="wrap">
+  <h1 class="title is-4" style="margin:0 0 1rem">请求日志</h1>
+
+  <form class="card" style="margin-bottom:1rem" id="formFilter">
+    <div class="card-content">
+      <div class="columns is-multiline is-variable is-1">
+        <div class="column is-2"><label class="label is-size-7">模型</label>
+          <input class="input is-small mono" id="qModel" placeholder="精确匹配"></div>
+        <div class="column is-2"><label class="label is-size-7">状态</label>
+          <div class="control select is-small is-fullwidth"><select id="qStatus">
+            <option value="">全部</option><option value="ok">成功</option><option value="error">失败</option>
+          </select></div></div>
+        <div class="column is-2"><label class="label is-size-7">渠道 ID</label>
+          <input class="input is-small" id="qChannel" type="number" min="1" placeholder="可选"></div>
+        <div class="column is-2"><label class="label is-size-7">密钥 ID</label>
+          <input class="input is-small" id="qKey" type="number" min="1" placeholder="可选"></div>
+        <div class="column"><label class="label is-size-7">起始时间（本地时区）</label>
+          <input class="input is-small" id="qSince" type="datetime-local"></div>
+        <div class="column"><label class="label is-size-7">结束时间</label>
+          <input class="input is-small" id="qUntil" type="datetime-local"></div>
+      </div>
+      <div class="buttons" style="margin-bottom:0">
+        <button class="button is-link is-small" type="submit">查询</button>
+        <button class="button is-small" type="button" id="btnReset">重置</button>
+        <span class="has-text-grey is-size-7" id="totalLine" style="align-self:center;margin-left:.5rem"></span>
+      </div>
+    </div>
+  </form>
+
+  <div class="table-container card">
+    <table class="table is-fullwidth is-size-7 is-hoverable" style="border-radius:12px">
+      <thead><tr>
+        <th>时间</th><th>模型</th><th>协议</th><th>状态</th><th>延迟/TTFB</th>
+        <th>输入 Tok</th><th>输出 Tok</th><th>成本</th><th>渠道/密钥</th>
+      </tr></thead>
+      <tbody id="rows"><tr><td colspan="9" class="has-text-grey">加载中…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:.6rem;margin-top:.9rem">
+    <button class="button is-small" id="btnPrev">← 上一页</button>
+    <button class="button is-small" id="btnNext">下一页 →</button>
+    <div class="control select is-small"><select id="qLimit">
+      <option>50</option><option selected>100</option><option>200</option><option>500</option>
+    </select></div>
+    <span class="is-size-7 has-text-grey">条/页</span>
+  </div>
+</div>
+
+<!-- 错误详情模态框 -->
+<div class="modal" id="errModal">
+  <div class="modal-background"></div>
+  <div class="modal-card">
+    <header class="modal-card-head"><p class="modal-card-title">错误详情</p>
+      <button class="delete" id="errClose" aria-label="close"></button></header>
+    <section class="modal-card-body"><pre class="errbox mono" id="errBody" style="background:transparent;padding:0"></pre></section>
+    <footer class="modal-card-foot"><button class="button" id="errOk">关闭</button></footer>
+  </div>
+</div>
+
+<script src="/static/common.js"></script>
+<script>
+'use strict';
+renderNav();
+
+let offset = 0;
+let channels = [], keys = [];
+
+// 后端 since/until 用 UTC "YYYY-MM-DD HH:MM:SS" 比较
+function localToUTC(s) {
+  if (!s) return '';
+  const d = new Date(s);
+  if (isNaN(d)) return '';
+  const p = x => String(x).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+}
+
+function buildQuery() {
+  const q = new URLSearchParams();
+  const model = document.getElementById('qModel').value.trim();
+  const status = document.getElementById('qStatus').value;
+  const ch = document.getElementById('qChannel').value;
+  const key = document.getElementById('qKey').value;
+  const since = localToUTC(document.getElementById('qSince').value);
+  const until = localToUTC(document.getElementById('qUntil').value);
+  if (model) q.set('model', model);
+  if (status) q.set('status', status);
+  if (ch) q.set('channel_id', ch);
+  if (key) q.set('api_key_id', key);
+  if (since) q.set('since', since);
+  if (until) q.set('until', until);
+  q.set('limit', document.getElementById('qLimit').value);
+  q.set('offset', offset);
+  return q.toString();
+}
+
+async function load() {
+  try {
+    const page = await api('/api/admin/logs?' + buildQuery());
+    document.getElementById('totalLine').textContent = `共 ${fmtInt(page.total)} 条`;
+    const items = page.items || [];
+    const tb = document.getElementById('rows');
+    if (!items.length) { tb.innerHTML = '<tr><td colspan="9" class="has-text-grey">无记录</td></tr>'; return; }
+    tb.innerHTML = items.map(l => {
+      const isErr = l.status >= 400 || l.error;
+      const chName = (channels.find(c => c.id === l.channel_id) || {}).name || ('#' + l.channel_id);
+      const keyName = (keys.find(k => k.id === l.api_key_id) || {}).name || ('#' + l.api_key_id);
+      return `<tr ${l.error ? `style="cursor:pointer" title="点击查看错误详情" onclick="showErr('${String(l.id)}', this)" data-err="${esc(l.error)}"` : ''}>
+        <td class="mono">${fmtTs(l.ts)}</td>
+        <td class="mono">${esc(l.model)}</td>
+        <td><span class="tag is-light">${esc(l.protocol)}</span></td>
+        <td>${isErr ? `<span class="status bad">${l.status}</span>` : `<span class="status ok">${l.status}</span>`}</td>
+        <td class="mono">${l.latency_ms}ms / ${l.ttfb_ms}ms</td>
+        <td>${fmtInt(l.prompt_tokens)}</td>
+        <td>${fmtInt(l.completion_tokens)}</td>
+        <td>${fmtUSD(l.cost_usd)}</td>
+        <td class="has-text-grey">${esc(chName)} / ${esc(keyName)}</td>
+      </tr>`;
+    }).join('');
+    document.getElementById('btnPrev').disabled = offset <= 0;
+    document.getElementById('btnNext').disabled = offset + items.length >= page.total;
+  } catch (ex) { toast('加载失败：' + ex.message, false); }
+}
+
+async function loadRefs() {
+  try {
+    [channels, keys] = await Promise.all([api('/api/admin/channels'), api('/api/admin/keys')]);
+  } catch (_) { /* 仅影响展示名，失败不阻塞 */ }
+}
+
+window.showErr = function (id, tr) {
+  document.getElementById('errBody').textContent = tr.dataset.err || '(空)';
+  document.getElementById('errModal').classList.add('is-active');
+};
+document.getElementById('errClose').addEventListener('click', () => document.getElementById('errModal').classList.remove('is-active'));
+document.getElementById('errOk').addEventListener('click', () => document.getElementById('errModal').classList.remove('is-active'));
+document.querySelector('#errModal .modal-background').addEventListener('click', () => document.getElementById('errModal').classList.remove('is-active'));
+
+document.getElementById('formFilter').addEventListener('submit', e => { e.preventDefault(); offset = 0; load(); });
+document.getElementById('btnReset').addEventListener('click', () => {
+  ['qModel', 'qChannel', 'qKey', 'qSince', 'qUntil'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('qStatus').value = '';
+  offset = 0; load();
+});
+document.getElementById('btnPrev').addEventListener('click', () => {
+  offset = Math.max(0, offset - parseInt(document.getElementById('qLimit').value, 10)); load();
+});
+document.getElementById('btnNext').addEventListener('click', () => {
+  offset += parseInt(document.getElementById('qLimit').value, 10); load();
+});
+document.getElementById('qLimit').addEventListener('change', () => { offset = 0; load(); });
+
+(async () => { await loadRefs(); await load(); })();
+</script>
+</body>
+</html>

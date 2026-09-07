@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>登录 - LiteGate</title>
+<link rel="stylesheet" href="/static/vendor/bulma.min.css">
+<link rel="stylesheet" href="/static/skin.css">
+<link rel="stylesheet" href="/static/admin.css">
+<style>body{display:flex;align-items:center;justify-content:center;min-height:100vh}</style>
+</head>
+<body>
+<div style="width:360px;max-width:92vw">
+  <h1 class="title is-4 has-text-centered">LiteGate</h1>
+  <p class="subtitle is-6 has-text-centered has-text-grey">轻量 AI 网关 · 管理登录</p>
+  <form id="form">
+    <div class="field">
+      <label class="label" for="pw">管理密码</label>
+      <div class="control">
+        <input class="input" id="pw" type="password" placeholder="管理密码" autofocus autocomplete="current-password">
+      </div>
+    </div>
+    <p id="err" class="help is-danger" style="min-height:1.2em"></p>
+    <button class="button is-link is-fullwidth" id="btn" type="submit">登 录</button>
+  </form>
+  <p class="has-text-centered is-size-7 has-text-grey" style="margin-top:1rem">会话有效期 7 天 · 服务重启后需重新登录</p>
+</div>
+<script src="/static/common.js"></script>
+<script>
+'use strict';
+// 已登录直接进仪表盘
+if (getToken()) {
+  api('/api/admin/dashboard').then(() => { location.href = '/'; }).catch(() => {});
+}
+document.getElementById('form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = document.getElementById('btn');
+  const err = document.getElementById('err');
+  err.textContent = '';
+  btn.classList.add('is-loading');
+  try {
+    const data = await api('/api/admin/login', {
+      method: 'POST',
+      body: JSON.stringify({ password: document.getElementById('pw').value }),
+    });
+    setToken(data.token);
+    location.href = '/';
+  } catch (ex) {
+    err.textContent = ex.message === 'wrong password' ? '密码错误' : ('登录失败：' + ex.message);
+  } finally {
+    btn.classList.remove('is-loading');
+  }
+});
+</script>
+</body>
+</html>

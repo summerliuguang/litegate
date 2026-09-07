@@ -7,7 +7,7 @@ import (
 	"net/http"
 )
 
-//go:embed index.html
+//go:embed *.html static
 var content embed.FS
 
 // Handler 返回内嵌页面的文件服务。

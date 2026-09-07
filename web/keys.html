@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>虚拟密钥 - LiteGate</title>
+<link rel="stylesheet" href="/static/vendor/bulma.min.css">
+<link rel="stylesheet" href="/static/skin.css">
+<link rel="stylesheet" href="/static/admin.css">
+</head>
+<body data-page="keys">
+<div class="wrap">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+    <h1 class="title is-4" style="margin:0">虚拟密钥</h1>
+    <form class="field has-addons" style="margin:0" id="formNew">
+      <input class="input is-small" id="fName" placeholder="密钥名称，如 my-claude" style="width:200px" required>
+      <button class="button is-link is-small" type="submit">＋ 签发</button>
+    </form>
+  </div>
+  <p class="is-size-7 has-text-grey" style="margin-bottom:.8rem">
+    下游客户端用虚拟密钥访问网关（上游真实密钥保存在渠道里，不会暴露）。OpenAI 协议用 <code>Authorization: Bearer</code>，Anthropic 协议用 <code>x-api-key</code>，Base URL 填 <code class="mono" id="baseHint"></code>。
+  </p>
+  <div class="table-container card">
+    <table class="table is-fullwidth is-size-7" style="border-radius:12px">
+      <thead><tr><th>ID</th><th>名称</th><th>密钥</th><th>模型限制</th><th>创建时间</th><th style="min-width:220px">操作</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="6" class="has-text-grey">加载中…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 编辑密钥模态框 -->
+<div class="modal" id="editModal">
+  <div class="modal-background"></div>
+  <div class="modal-card">
+    <header class="modal-card-head"><p class="modal-card-title">编辑密钥</p>
+      <button class="delete" id="eClose" aria-label="close"></button></header>
+    <section class="modal-card-body">
+      <div class="field"><label class="label is-size-7">名称</label>
+        <input class="input is-small" id="eName"></div>
+      <div class="field"><label class="label is-size-7">允许的模型（每行一个，留空 = 不限制；只能调用各渠道当前启用的模型）</label>
+        <textarea class="textarea is-small mono" id="eModels" rows="6" placeholder="deepseek-v4-flash&#10;mimo-v2.5"></textarea></div>
+      <p id="eErr" class="help is-danger" style="min-height:1.2em"></p>
+    </section>
+    <footer class="modal-card-foot">
+      <button class="button is-link" id="eSave">保存</button>
+      <button class="button" id="eCancel">取消</button>
+    </footer>
+  </div>
+</div>
+<script src="/static/common.js"></script>
+<script>
+'use strict';
+renderNav();
+document.getElementById('baseHint').textContent = location.origin;
+
+async function load() {
+  try {
+    const keys = keysCache = await api('/api/admin/keys');
+    const tb = document.getElementById('rows');
+    if (!keys.length) {
+      tb.innerHTML = '<tr><td colspan="6" class="has-text-grey">还没有密钥，上方输入名称签发一个</td></tr>';
+      return;
+    }
+    tb.innerHTML = keys.map(k => {
+      const lim = k.allowed_models && k.allowed_models.length
+        ? `<span title="${esc(k.allowed_models.join('\n'))}">限 ${k.allowed_models.length} 个模型</span>`
+        : '<span class="has-text-grey">全部模型</span>';
+      return `<tr>
+      <td>${k.id}</td>
+      <td><b>${esc(k.name)}</b></td>
+      <td class="mono" data-keycell="${k.id}" data-shown="0">${esc(k.key)}</td>
+      <td>${lim}</td>
+      <td class="mono">${fmtTs(k.created_at)}</td>
+      <td>
+        <button class="button is-small" onclick="toggleKey(${k.id})">显示</button>
+        <button class="button is-small" onclick="copyKey(${k.id})">复制</button>
+        <button class="button is-small" onclick="openEditKey(${k.id})">编辑</button>
+        <button class="button is-small is-danger is-light" onclick="delKey(${k.id}, '${esc(k.name)}')">删除</button>
+      </td>
+    </tr>`;
+    }).join('');
+  } catch (ex) { toast('加载失败：' + ex.message, false); }
+}
+
+document.getElementById('formNew').addEventListener('submit', async e => {
+  e.preventDefault();
+  const name = document.getElementById('fName').value.trim();
+  if (!name) return;
+  try {
+    const k = await api('/api/admin/keys', { method: 'POST', body: JSON.stringify({ name }) });
+    document.getElementById('fName').value = '';
+    toast('已签发：' + k.key);
+    load();
+  } catch (ex) { toast('签发失败：' + ex.message, false); }
+});
+
+window.delKey = async function (id, name) {
+  if (!confirm(`确定删除密钥「${name}」？使用它的客户端将立即失去访问权限。`)) return;
+  try { await api('/api/admin/keys/' + id, { method: 'DELETE' }); toast('已删除'); load(); }
+  catch (ex) { toast('删除失败：' + ex.message, false); }
+};
+
+// ---- 密钥显示/复制（明文按需获取，列表默认打码） ----
+const revealed = {};
+async function revealKey(id) {
+  if (!revealed[id]) {
+    const r = await api(`/api/admin/keys/${id}/reveal`);
+    revealed[id] = r.key;
+  }
+  return revealed[id];
+}
+window.toggleKey = async function (id) {
+  const cell = document.querySelector(`[data-keycell="${id}"]`);
+  const k = keysCache.find(x => x.id === id);
+  if (cell.dataset.shown === '1') {
+    cell.textContent = k.key;
+    cell.dataset.shown = '0';
+  } else {
+    cell.textContent = await revealKey(id);
+    cell.dataset.shown = '1';
+  }
+  // 更新按钮文案
+  const btn = cell.closest('tr').querySelector('button[onclick^="toggleKey"]');
+  btn.textContent = cell.dataset.shown === '1' ? '隐藏' : '显示';
+};
+window.copyKey = async function (id) {
+  copyText(await revealKey(id));
+};
+
+// ---- 编辑密钥 ----
+let keysCache = [];
+let editingKeyId = null;
+
+window.openEditKey = function (id) {
+  const k = keysCache.find(x => x.id === id);
+  if (!k) return;
+  editingKeyId = id;
+  document.getElementById('eName').value = k.name;
+  document.getElementById('eModels').value = (k.allowed_models || []).join('\n');
+  document.getElementById('eErr').textContent = '';
+  document.getElementById('editModal').classList.add('is-active');
+};
+function closeEdit() { document.getElementById('editModal').classList.remove('is-active'); }
+document.getElementById('eClose').addEventListener('click', closeEdit);
+document.getElementById('eCancel').addEventListener('click', closeEdit);
+document.querySelector('#editModal .modal-background').addEventListener('click', closeEdit);
+document.getElementById('eSave').addEventListener('click', async () => {
+  const name = document.getElementById('eName').value.trim();
+  if (!name) { document.getElementById('eErr').textContent = '名称不能为空'; return; }
+  const models = document.getElementById('eModels').value.split('\n').map(s => s.trim()).filter(Boolean);
+  try {
+    await api('/api/admin/keys/' + editingKeyId, {
+      method: 'PUT',
+      body: JSON.stringify({ name, allowed_models: models }),
+    });
+    closeEdit(); toast('已保存'); load();
+  } catch (ex) { document.getElementById('eErr').textContent = ex.message; }
+});
+
+load();
+</script>
+</body>
+</html>

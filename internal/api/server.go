@@ -17,6 +17,8 @@ func NewServer(st *store.Store, adminPassword string, webHandler http.Handler) h
 		st:       st,
 		password: adminPassword,
 		sessions: map[string]time.Time{},
+		failures: map[string]int{},
+		locked:   map[string]time.Time{},
 	}
 	a.register(mux)
 
@@ -25,6 +27,9 @@ func NewServer(st *store.Store, adminPassword string, webHandler http.Handler) h
 		client: newUpstreamClient(),
 	}
 	p.register(mux)
+
+	a.invalidateModels = p.invalidateModelsCache
+	a.invalidatePrices = p.invalidatePriceCache
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

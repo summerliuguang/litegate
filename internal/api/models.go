@@ -26,14 +26,53 @@ type modelsCache struct {
 }
 
 func (p *proxy) serveModels(w http.ResponseWriter, r *http.Request) {
-	if _, err := p.authenticate(r); err != nil {
+	ak, err := p.authenticate(r)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid api key"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": p.aggregateModels(r.Context())})
+	data := p.aggregateModels(r.Context())
+	// 密钥配置了模型白名单时,只返回交集
+	if len(ak.AllowedModels) > 0 {
+		filtered := data[:0:0]
+		for _, m := range data {
+			if containsModelStr(ak.AllowedModels, m.ID) {
+				filtered = append(filtered, m)
+			}
+		}
+		data = filtered
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
 }
 
-// aggregateModels 并发拉取所有 openai 渠道的模型列表并按 id 去重，结果缓存 60 秒。
+// invalidateModelsCache 使聚合缓存失效（管理面增删渠道、启停模型时调用）。
+func (p *proxy) invalidateModelsCache() {
+	p.cache.mu.Lock()
+	p.cache.data = nil
+	p.cache.at = time.Time{}
+	p.cache.mu.Unlock()
+}
+
+// invalidatePriceCache 使价格缓存失效（管理面改价时调用，否则成本核算滞后 60 秒）。
+func (p *proxy) invalidatePriceCache() {
+	p.pc.mu.Lock()
+	p.pc.prices = nil
+	p.pc.expires = time.Time{}
+	p.pc.mu.Unlock()
+}
+
+func containsModelStr(list []string, s string) bool {
+	for _, m := range list {
+		if m == s {
+			return true
+		}
+	}
+	return false
+}
+
+// aggregateModels 返回全部"启用中"的模型：显式列出 models 的渠道直接用配置列表
+// （禁用模型已不在其中），通配渠道拉上游列表并剔除禁用项；结果缓存 60 秒，
+// 管理面变更渠道/启停模型时会主动失效。
 func (p *proxy) aggregateModels(ctx context.Context) []modelItem {
 	p.cache.mu.Lock()
 	if p.cache.data != nil && time.Since(p.cache.at) < time.Minute {
@@ -47,23 +86,36 @@ func (p *proxy) aggregateModels(ctx context.Context) []modelItem {
 	if err != nil {
 		return p.cachedModels()
 	}
+	chans = enabledOnly(chans)
 	var (
 		mu   sync.Mutex
 		wg   sync.WaitGroup
 		out  []modelItem
 		seen = map[string]bool{}
 	)
+	add := func(id, owner string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if id != "" && !seen[id] {
+			seen[id] = true
+			out = append(out, modelItem{ID: id, Object: "model", OwnedBy: owner})
+		}
+	}
 	for _, c := range chans {
+		if len(c.Models) > 0 {
+			for _, id := range c.Models {
+				add(id, c.Name)
+			}
+			continue
+		}
 		wg.Add(1)
 		go func(c store.Channel) {
 			defer wg.Done()
 			for _, id := range fetchChannelModels(ctx, p.client, &c) {
-				mu.Lock()
-				if !seen[id] {
-					seen[id] = true
-					out = append(out, modelItem{ID: id, Object: "model", OwnedBy: c.Name})
+				if containsModelStr(c.DisabledModels, id) {
+					continue
 				}
-				mu.Unlock()
+				add(id, c.Name)
 			}
 		}(c)
 	}
@@ -76,12 +128,19 @@ func (p *proxy) aggregateModels(ctx context.Context) []modelItem {
 	}
 	data := p.cache.data
 	p.cache.mu.Unlock()
+	if data == nil {
+		// 防止 {"data":null} 打崩客户端解析
+		data = []modelItem{}
+	}
 	return data
 }
 
 func (p *proxy) cachedModels() []modelItem {
 	p.cache.mu.Lock()
 	defer p.cache.mu.Unlock()
+	if p.cache.data == nil {
+		return []modelItem{}
+	}
 	return p.cache.data
 }
 

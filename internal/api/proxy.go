@@ -96,9 +96,16 @@ func (p *proxy) serve(w http.ResponseWriter, r *http.Request, protocol, upstream
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// 停用的渠道不接流量
+	chans = enabledOnly(chans)
 	chans = filterByModel(chans, model)
 	if len(chans) == 0 {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no enabled channel serves model: " + model})
+		return
+	}
+	// 虚拟密钥的模型白名单：留空不限制；配置了则只放行列出的模型
+	if model != "" && !ak.AllowsModel(model) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "model not allowed for this api key: " + model})
 		return
 	}
 
@@ -139,15 +146,44 @@ func (p *proxy) serve(w http.ResponseWriter, r *http.Request, protocol, upstream
 
 	status := http.StatusBadGateway
 	msg := "all channels failed"
+	// 对下游只给通用错误：渠道名/上游地址等细节留给服务端日志，防止虚拟密钥持有者探测内部拓扑
 	if lastErr != nil {
-		msg += ": " + lastErr.Error()
+		log.Printf("proxy %s %s failed: %v", r.Method, upstreamPath, lastErr)
 	}
 	writeJSON(w, status, map[string]string{"error": msg})
-	p.logRequest(ak, nil, protocol, model, status, time.Since(start), time.Since(start), tokenUsage{}, msg)
+	p.logRequest(ak, nil, protocol, model, status, time.Since(start), time.Since(start), tokenUsage{}, errMsg(lastErr))
+}
+
+// errMsg 返回内部错误的安全摘要（截断，供日志表使用）。
+func errMsg(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	if len(s) > 512 {
+		s = s[:512]
+	}
+	return s
+}
+
+// enabledOnly 过滤掉停用的渠道。
+func enabledOnly(chans []store.Channel) []store.Channel {
+	out := chans[:0:0]
+	for _, c := range chans {
+		if c.Enabled {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func (p *proxy) attemptUpstream(r *http.Request, c *store.Channel, path string, body []byte) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, c.BaseURL+path, bytes.NewReader(body))
+	upstream := c.BaseURL + path
+	if r.URL.RawQuery != "" {
+		// 客户端查询串原样透传（如 Azure 的 api-version、beta 开关）
+		upstream += "?" + r.URL.RawQuery
+	}
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstream, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -200,6 +236,9 @@ func (p *proxy) authenticate(r *http.Request) (*store.APIKey, error) {
 	return p.st.LookupAPIKey(key)
 }
 
+// passthroughHeaders 需要原样转发给上游的功能性请求头（白名单制，防止客户端伪造计费/身份头）。
+var passthroughHeaders = []string{"Anthropic-Beta", "OpenAI-Beta", "X-Stainless-Lang", "X-Stainless-Package-Version"}
+
 func setUpstreamHeaders(req *http.Request, inbound *http.Request, c *store.Channel) {
 	ct := inbound.Header.Get("Content-Type")
 	if ct == "" {
@@ -207,6 +246,11 @@ func setUpstreamHeaders(req *http.Request, inbound *http.Request, c *store.Chann
 	}
 	req.Header.Set("Content-Type", ct)
 	req.Header.Set("Accept", inbound.Header.Get("Accept"))
+	for _, h := range passthroughHeaders {
+		if v := inbound.Header.Get(h); v != "" {
+			req.Header.Set(h, v)
+		}
+	}
 	switch c.Type {
 	case "anthropic":
 		req.Header.Set("X-Api-Key", c.APIKey)
@@ -229,22 +273,15 @@ func jsonModel(body []byte) string {
 	return v.Model
 }
 
-// filterByModel 保留声明了该模型的渠道；models 为空表示通配。
+// filterByModel 保留当前服务该模型的渠道（显式列表 + 通配渠道的禁用列表，见 ServesModel）。
 func filterByModel(chans []store.Channel, model string) []store.Channel {
 	if model == "" {
 		return chans
 	}
 	out := chans[:0:0]
 	for _, c := range chans {
-		if len(c.Models) == 0 {
+		if c.ServesModel(model) {
 			out = append(out, c)
-			continue
-		}
-		for _, m := range c.Models {
-			if m == model {
-				out = append(out, c)
-				break
-			}
 		}
 	}
 	return out

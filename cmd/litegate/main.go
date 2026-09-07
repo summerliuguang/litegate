@@ -25,9 +25,9 @@ func main() {
 	dbPath := flag.String("db", "litegate.db", "SQLite 数据库文件路径")
 	flag.Parse()
 
-	cfg := config.Load(*addr, *dbPath)
-	if cfg.AdminPassword == "admin" && os.Getenv("LITEGATE_ADMIN_PASSWORD") == "" {
-		log.Print("警告：未设置 LITEGATE_ADMIN_PASSWORD，管理密码使用默认值 admin，请尽快修改")
+	cfg, err := config.Load(*addr, *dbPath)
+	if err != nil {
+		log.Fatalf("启动失败: %v", err)
 	}
 
 	var secret []byte
@@ -46,7 +46,7 @@ func main() {
 	defer st.Close()
 
 	if n, err := st.CountAPIKeys(); err == nil && n == 0 {
-		if k, err := st.CreateAPIKey("default"); err == nil {
+		if k, err := st.CreateAPIKey("default", nil); err == nil {
 			log.Printf("已生成默认虚拟密钥 %s （下游客户端用它在网关鉴权）", k.Key)
 		}
 	}

@@ -2,41 +2,114 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LiteGate</title>
-<style>
-  :root { color-scheme: light dark; }
-  body {
-    font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-    max-width: 720px; margin: 10vh auto 0; padding: 0 24px; line-height: 1.7;
-  }
-  h1 { font-size: 28px; margin-bottom: 4px; }
-  .badge { display: inline-block; padding: 2px 12px; border-radius: 999px; font-size: 14px; }
-  .ok { background: #e6f7e9; color: #1a7f37; }
-  .bad { background: #fdebec; color: #c0392b; }
-  code { background: rgba(127,127,127,.15); padding: 2px 6px; border-radius: 4px; }
-  ul { padding-left: 20px; }
-</style>
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>仪表盘 - LiteGate</title>
+<link rel="stylesheet" href="/static/vendor/bulma.min.css">
+<link rel="stylesheet" href="/static/skin.css">
+<link rel="stylesheet" href="/static/admin.css">
 </head>
-<body>
-<h1>LiteGate</h1>
-<p>轻量级 AI 网关 · 状态：<span id="status" class="badge">检查中…</span></p>
-<ul>
-  <li>数据面：<code>POST /v1/chat/completions</code> · <code>POST /v1/messages</code> · <code>GET /v1/models</code></li>
-  <li>管理面：<code>POST /api/admin/login</code> → <code>/api/admin/*</code></li>
-  <li>健康检查：<code>GET /healthz</code></li>
-</ul>
-<p>完整管理界面在后续版本中提供，当前请使用管理 API。</p>
+<body data-page="dashboard">
+<div class="wrap">
+  <h1 class="title is-4" style="margin:0">仪表盘</h1>
+  <p class="is-size-7 has-text-grey" style="margin:.3rem 0 1rem">今日与近 7 天用量 · 每 10 秒自动刷新</p>
+
+  <div class="tile is-ancestor">
+    <div class="tile is-parent is-3"><div class="tile is-child card"><div class="card-content has-text-centered">
+      <p class="heading">今日请求</p>
+      <p class="stat-num" id="vReq">--</p>
+      <p class="has-text-grey is-size-7" id="vErr">错误 --</p>
+    </div></div></div>
+    <div class="tile is-parent is-3"><div class="tile is-child card"><div class="card-content has-text-centered">
+      <p class="heading">今日 Tokens</p>
+      <p class="stat-num" id="vTok">--</p>
+      <p class="has-text-grey is-size-7" id="vTokDetail">输入 -- / 输出 --</p>
+    </div></div></div>
+    <div class="tile is-parent is-3"><div class="tile is-child card"><div class="card-content has-text-centered">
+      <p class="heading">今日成本</p>
+      <p class="stat-num" id="vCost">--</p>
+      <p class="has-text-grey is-size-7">美元（按价格表核算）</p>
+    </div></div></div>
+    <div class="tile is-parent is-3"><div class="tile is-child card"><div class="card-content has-text-centered">
+      <p class="heading">渠道 / 密钥</p>
+      <p class="stat-num" id="vCh">--</p>
+      <p class="has-text-grey is-size-7" id="vKey">密钥 -- 个</p>
+    </div></div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:1.2rem">
+    <div class="card-content">
+      <h2 class="title is-5">近 7 天请求</h2>
+      <div id="dailyBars"><p class="has-text-grey is-size-7">加载中…</p></div>
+    </div>
+  </div>
+
+  <div class="columns">
+    <div class="column">
+      <div class="card">
+        <div class="card-content">
+          <h2 class="title is-5">近 7 天按模型 Top10</h2>
+          <div class="table-container"><table class="table is-fullwidth is-size-7">
+            <thead><tr><th>模型</th><th>请求</th><th>Tokens</th><th>成本</th></tr></thead>
+            <tbody id="byModel"><tr><td colspan="4" class="has-text-grey">加载中…</td></tr></tbody>
+          </table></div>
+        </div>
+      </div>
+    </div>
+    <div class="column">
+      <div class="card">
+        <div class="card-content">
+          <h2 class="title is-5">近 7 天按渠道 Top10</h2>
+          <div class="table-container"><table class="table is-fullwidth is-size-7">
+            <thead><tr><th>渠道</th><th>请求</th><th>Tokens</th><th>成本</th></tr></thead>
+            <tbody id="byChannel"><tr><td colspan="4" class="has-text-grey">加载中…</td></tr></tbody>
+          </table></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/static/common.js"></script>
 <script>
-fetch('/healthz').then(r => r.json()).then(j => {
-  const el = document.getElementById('status');
-  el.textContent = '运行中';
-  el.className = 'badge ok';
-}).catch(() => {
-  const el = document.getElementById('status');
-  el.textContent = '异常';
-  el.className = 'badge bad';
-});
+'use strict';
+renderNav();
+
+function usageRow(u) {
+  return `<tr><td class="mono">${esc(u.model || u.channel_name || '(已删除渠道)')}</td>` +
+    `<td>${fmtInt(u.requests)}</td><td>${fmtTok(Number(u.prompt_tokens) + Number(u.completion_tokens))}</td>` +
+    `<td>${fmtUSD(u.cost_usd)}</td></tr>`;
+}
+
+async function load() {
+  try {
+    const d = await api('/api/admin/dashboard');
+    document.getElementById('vReq').textContent = fmtInt(d.today_requests);
+    document.getElementById('vErr').textContent = '错误 ' + fmtInt(d.today_errors);
+    const tok = Number(d.today_prompt_tokens) + Number(d.today_completion_tokens);
+    document.getElementById('vTok').textContent = fmtTok(tok);
+    document.getElementById('vTokDetail').textContent = `输入 ${fmtTok(d.today_prompt_tokens)} / 输出 ${fmtTok(d.today_completion_tokens)}`;
+    document.getElementById('vCost').textContent = fmtUSD(d.today_cost_usd);
+    document.getElementById('vCh').textContent = `${d.channels_enabled}/${d.channels}`;
+    document.getElementById('vKey').textContent = `密钥 ${d.keys} 个`;
+
+    // 近 7 天条形图（按请求数）
+    const days = d.daily || [];
+    const max = Math.max(1, ...days.map(x => x.requests));
+    document.getElementById('dailyBars').innerHTML = days.length ? days.map(x => {
+      const w = Math.round(100 * x.requests / max);
+      return `<div class="bar-row"><span class="bar-day">${esc(x.day)}</span>` +
+        `<div class="bar-track"><div class="bar-fill" style="width:${w}%"></div></div>` +
+        `<span class="bar-val">${fmtInt(x.requests)} 次 · ${fmtUSD(x.cost_usd)}</span></div>`;
+    }).join('') : '<p class="has-text-grey is-size-7">暂无数据</p>';
+
+    const bm = d.by_model || [], bc = d.by_channel || [];
+    document.getElementById('byModel').innerHTML = bm.length ? bm.map(usageRow).join('')
+      : '<tr><td colspan="4" class="has-text-grey">暂无数据</td></tr>';
+    document.getElementById('byChannel').innerHTML = bc.length ? bc.map(usageRow).join('')
+      : '<tr><td colspan="4" class="has-text-grey">暂无数据</td></tr>';
+  } catch (ex) { toast('加载失败：' + ex.message, false); }
+}
+load();
+setInterval(load, 10000);
 </script>
 </body>
 </html>

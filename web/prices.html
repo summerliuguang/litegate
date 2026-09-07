@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>模型价格 - LiteGate</title>
+<link rel="stylesheet" href="/static/vendor/bulma.min.css">
+<link rel="stylesheet" href="/static/skin.css">
+<link rel="stylesheet" href="/static/admin.css">
+</head>
+<body data-page="prices">
+<div class="wrap">
+  <h1 class="title is-4" style="margin:0 0 .3rem">模型价格</h1>
+  <p class="is-size-7 has-text-grey" style="margin-bottom:1rem">
+    单位：美元 / 百万 token，与 OpenAI 定价页口径一致。未配置价格的模型不计成本（记 0）。
+    价格匹配先精确、再最长前缀：<code>gpt-4o</code> 覆盖 <code>gpt-4o-2024-08-06</code>。
+  </p>
+
+  <form class="card" style="margin-bottom:1.2rem" id="formUp">
+    <div class="card-content">
+      <div class="columns is-multiline">
+        <div class="column is-half">
+          <label class="label is-size-7">模型名（支持 <code>模型名前缀</code> 写法匹配一族）</label>
+          <input class="input is-small mono" id="fModel" placeholder="gpt-4o" required>
+        </div>
+        <div class="column"><label class="label is-size-7">输入价 $/M</label>
+          <input class="input is-small" id="fIn" type="number" min="0" step="any" placeholder="2.5" required></div>
+        <div class="column"><label class="label is-size-7">输出价 $/M</label>
+          <input class="input is-small" id="fOut" type="number" min="0" step="any" placeholder="10" required></div>
+        <div class="column is-narrow" style="display:flex;align-items:flex-end">
+          <button class="button is-link is-small" type="submit">保存（新建或覆盖）</button>
+        </div>
+      </div>
+    </div>
+  </form>
+
+  <div class="table-container card">
+    <table class="table is-fullwidth is-size-7" style="border-radius:12px">
+      <thead><tr><th>模型</th><th>输入价 $/M</th><th>输出价 $/M</th><th>更新时间</th><th style="min-width:90px">操作</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="5" class="has-text-grey">加载中…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+<script src="/static/common.js"></script>
+<script>
+'use strict';
+renderNav();
+
+// 模型名可能含 "/"，DELETE 走通配路由 /prices/{model...}
+function delUrl(model) { return '/api/admin/prices/' + model.split('/').map(encodeURIComponent).join('/'); }
+
+async function load() {
+  try {
+    const prices = await api('/api/admin/prices');
+    const tb = document.getElementById('rows');
+    if (!prices.length) {
+      tb.innerHTML = '<tr><td colspan="5" class="has-text-grey">还没有价格配置，用上方表单添加</td></tr>';
+      return;
+    }
+    tb.innerHTML = prices.map(p => `<tr>
+      <td class="mono"><b>${esc(p.model)}</b></td>
+      <td>${p.input_price}</td>
+      <td>${p.output_price}</td>
+      <td class="mono">${fmtTs(p.updated_at)}</td>
+      <td><button class="button is-small is-danger is-light" onclick="delPrice('${esc(p.model)}')">删除</button></td>
+    </tr>`).join('');
+  } catch (ex) { toast('加载失败：' + ex.message, false); }
+}
+
+document.getElementById('formUp').addEventListener('submit', async e => {
+  e.preventDefault();
+  const body = {
+    model: document.getElementById('fModel').value.trim(),
+    input_price: parseFloat(document.getElementById('fIn').value),
+    output_price: parseFloat(document.getElementById('fOut').value),
+  };
+  if (!body.model || isNaN(body.input_price) || isNaN(body.output_price)) return;
+  try {
+    await api('/api/admin/prices', { method: 'PUT', body: JSON.stringify(body) });
+    toast('已保存：' + body.model);
+    load();
+  } catch (ex) { toast('保存失败：' + ex.message, false); }
+});
+
+window.delPrice = async function (model) {
+  if (!confirm(`确定删除「${model}」的价格配置？`)) return;
+  try { await api(delUrl(model), { method: 'DELETE' }); toast('已删除'); load(); }
+  catch (ex) { toast('删除失败：' + ex.message, false); }
+};
+
+load();
+</script>
+</body>
+</html>

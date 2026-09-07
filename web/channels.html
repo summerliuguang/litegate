@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>渠道管理 - LiteGate</title>
+<link rel="stylesheet" href="/static/vendor/bulma.min.css">
+<link rel="stylesheet" href="/static/skin.css">
+<link rel="stylesheet" href="/static/admin.css">
+</head>
+<body data-page="channels">
+<div class="wrap">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+    <h1 class="title is-4" style="margin:0">渠道管理</h1>
+    <button class="button is-link" id="btnNew">＋ 新建渠道</button>
+  </div>
+  <p class="is-size-7 has-text-grey" style="margin-bottom:.8rem">
+    按优先级降序、同级按权重加权轮询；上游故障自动转移到下一优先级。base_url 需含版本前缀（如 <code>https://api.openai.com/v1</code>）。
+  </p>
+  <div class="table-container card">
+    <table class="table is-fullwidth is-size-7" style="border-radius:12px">
+      <thead><tr>
+        <th>ID</th><th>名称</th><th>类型</th><th>Base URL</th><th>密钥</th><th>模型</th>
+        <th>优先级</th><th>权重</th><th>状态</th><th style="min-width:220px">操作</th>
+      </tr></thead>
+      <tbody id="rows"><tr><td colspan="10" class="has-text-grey">加载中…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 新建/编辑模态框 -->
+<div class="modal" id="modal">
+  <div class="modal-background"></div>
+  <div class="modal-card">
+    <header class="modal-card-head"><p class="modal-card-title" id="mTitle">新建渠道</p>
+      <button class="delete" id="mClose" aria-label="close"></button></header>
+    <section class="modal-card-body">
+      <div class="field"><label class="label is-size-7">名称 *</label>
+        <input class="input is-small" id="fName" placeholder="如 openai-main"></div>
+      <div class="field"><label class="label is-size-7">类型 *</label>
+        <div class="control select is-small is-fullwidth"><select id="fType">
+          <option value="openai">openai（OpenAI 兼容）</option>
+          <option value="anthropic">anthropic（Anthropic 兼容）</option>
+        </select></div></div>
+      <div class="field"><label class="label is-size-7">Base URL *</label>
+        <input class="input is-small" id="fBase" placeholder="https://api.openai.com/v1"></div>
+      <div class="field"><label class="label is-size-7">API Key <span id="keyHint" class="has-text-grey"></span></label>
+        <input class="input is-small mono" id="fKey" placeholder="sk-…"></div>
+      <div class="field" id="modelsField">
+        <label class="label is-size-7">模型（勾选 = 启用，不勾 = 禁用；全部不勾 = 通配服务任意模型）</label>
+        <div class="is-flex" style="gap:.5rem;margin-bottom:.4rem">
+          <input class="input is-small mono" id="fNewModel" placeholder="添加新模型名，回车或点添加" style="flex:1">
+          <button class="button is-small" type="button" id="btnAddModel">添加</button>
+        </div>
+        <input class="input is-small mono" id="fModelFilter" placeholder="搜索模型…" style="margin-bottom:.4rem">
+        <div id="modelList" style="max-height:240px;overflow-y:auto;border:1px solid var(--line,#e8eaf0);border-radius:8px;padding:.4rem .6rem"></div>
+        <div class="is-flex" style="gap:.5rem;margin-top:.4rem;align-items:center">
+          <button class="button is-small" type="button" id="btnCheckFiltered">勾选搜索结果</button>
+          <button class="button is-small" type="button" id="btnUncheckFiltered">取消勾选搜索结果</button>
+          <span class="is-size-7 has-text-grey" id="modelCount"></span>
+        </div>
+      </div>
+      <div class="columns">
+        <div class="column"><div class="field"><label class="label is-size-7">优先级（大者先用）</label>
+          <input class="input is-small" id="fPriority" type="number" value="0"></div></div>
+        <div class="column"><div class="field"><label class="label is-size-7">权重（同级轮询）</label>
+          <input class="input is-small" id="fWeight" type="number" value="1"></div></div>
+      </div>
+      <div class="field"><label class="label is-size-7">备注</label>
+        <input class="input is-small" id="fRemark" placeholder="可选"></div>
+      <label class="checkbox is-size-7"><input type="checkbox" id="fEnabled" checked> 启用该渠道</label>
+      <p id="mErr" class="help is-danger" style="min-height:1.2em"></p>
+    </section>
+    <footer class="modal-card-foot">
+      <button class="button is-link" id="mSave">保存</button>
+      <button class="button" id="mCancel">取消</button>
+    </footer>
+  </div>
+</div>
+
+<script src="/static/common.js"></script>
+<script>
+'use strict';
+renderNav();
+
+let channels = [];
+let editingId = null;   // null = 新建
+let editingCh = null;   // 编辑中的渠道对象（渲染禁用列表用）
+
+async function load() {
+  try {
+    channels = await api('/api/admin/channels');
+    renderRows();
+  } catch (ex) { toast('加载失败：' + ex.message, false); }
+}
+
+function renderRows() {
+  const tb = document.getElementById('rows');
+  if (!channels.length) {
+    tb.innerHTML = '<tr><td colspan="10" class="has-text-grey">还没有渠道，点右上角"新建渠道"添加第一个上游</td></tr>';
+    return;
+  }
+  tb.innerHTML = channels.map(c => `<tr>
+      <td>${c.id}</td>
+      <td><b>${esc(c.name)}</b>${c.remark ? `<br><span class="has-text-grey is-size-7">${esc(c.remark)}</span>` : ''}</td>
+      <td><span class="tag is-light">${esc(c.type)}</span></td>
+      <td class="mono" style="max-width:220px;word-break:break-all">${esc(c.base_url)}</td>
+      <td class="mono">${esc(c.api_key)}</td>
+      <td>${c.models && c.models.length ? esc(c.models.slice(0, 3).join(', ')) + (c.models.length > 3 ? ` 等 ${c.models.length} 个` : '') : '<span class="has-text-grey">任意</span>'}${c.disabled_models && c.disabled_models.length ? `<br><span class="has-text-grey is-size-7">已禁用 ${c.disabled_models.length} 个</span>` : ''}</td>
+      <td>${c.priority}</td>
+      <td>${c.weight}</td>
+      <td>${c.enabled ? '<span class="status ok">启用</span>' : '<span class="status">停用</span>'}</td>
+      <td>
+        <button class="button is-small is-link is-light" onclick="testCh(${c.id})">测试</button>
+        <button class="button is-small" onclick="openEdit(${c.id})">编辑</button>
+        <button class="button is-small is-danger is-light" onclick="delCh(${c.id}, '${esc(c.name)}')">删除</button>
+      </td>
+    </tr>`).join('');
+}
+
+let modelState = new Map(); // 模型名 -> 是否启用（勾选式编辑）
+let modelEditMode = 'checkbox'; // checkbox | text(通配渠道)
+
+function openModal(title, hint) {
+  document.getElementById('mTitle').textContent = title;
+  document.getElementById('keyHint').textContent = hint;
+  document.getElementById('mErr').textContent = '';
+  document.getElementById('modal').classList.add('is-active');
+}
+function closeModal() { document.getElementById('modal').classList.remove('is-active'); }
+
+// ---- 勾选式模型管理 ----
+function buildModelState(c) {
+  modelState = new Map();
+  if (!c) return;
+  (c.models || []).forEach(m => modelState.set(m, true));
+  (c.disabled_models || []).forEach(m => { if (!modelState.has(m)) modelState.set(m, false); });
+}
+
+function sortedModels() {
+  return [...modelState.keys()].sort((a, b) => {
+    const ea = modelState.get(a) ? 0 : 1, eb = modelState.get(b) ? 0 : 1;
+    return ea - eb || a.localeCompare(b);
+  });
+}
+
+function renderModelList(filter) {
+  const box = document.getElementById('modelList');
+  const kw = (filter || '').toLowerCase();
+  const all = sortedModels();
+  const rows = all.filter(m => !kw || m.toLowerCase().includes(kw));
+  if (!rows.length) {
+    box.innerHTML = `<span class="has-text-grey is-size-7">${all.length ? '无匹配' : '暂无模型，可添加或保存为通配模式'}</span>`;
+  } else {
+    box.innerHTML = rows.map(m =>
+      `<label style="display:flex;gap:.5rem;align-items:center;padding:.18rem 0;cursor:pointer">
+         <input type="checkbox" class="model-check" data-model="${esc(m)}" ${modelState.get(m) ? 'checked' : ''}>
+         <span class="mono" style="word-break:break-all">${esc(m)}</span>
+       </label>`).join('');
+  }
+  const enabled = all.filter(m => modelState.get(m)).length;
+  const shown = rows.filter(m => modelState.get(m)).length;
+  document.getElementById('modelCount').textContent =
+    `启用 ${enabled} / 共 ${all.length}` + (kw ? `（匹配 ${rows.length}，其中启用 ${shown}）` : '');
+}
+
+document.getElementById('fModelFilter').addEventListener('input', e => renderModelList(e.target.value));
+document.getElementById('modelList').addEventListener('change', e => {
+  const cb = e.target.closest('.model-check');
+  if (cb) modelState.set(cb.dataset.model, cb.checked);
+  renderModelList(document.getElementById('fModelFilter').value);
+});
+function setFiltered(checked) {
+  const kw = document.getElementById('fModelFilter').value.toLowerCase();
+  for (const m of modelState.keys()) {
+    if (!kw || m.toLowerCase().includes(kw)) modelState.set(m, checked);
+  }
+  renderModelList(document.getElementById('fModelFilter').value);
+}
+document.getElementById('btnCheckFiltered').addEventListener('click', () => setFiltered(true));
+document.getElementById('btnUncheckFiltered').addEventListener('click', () => setFiltered(false));
+function addModel() {
+  const input = document.getElementById('fNewModel');
+  const m = input.value.trim();
+  if (!m) return;
+  if (!modelState.has(m)) modelState.set(m, modelEditMode === 'checkbox'); // 显式渠道默认启用
+  input.value = '';
+  document.getElementById('fModelFilter').value = m;
+  renderModelList(m);
+}
+document.getElementById('btnAddModel').addEventListener('click', addModel);
+document.getElementById('fNewModel').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addModel(); } });
+
+document.getElementById('btnNew').addEventListener('click', () => {
+  editingId = null;
+  editingCh = null;
+  modelState = new Map();
+  modelEditMode = 'checkbox';
+  ['fName', 'fBase', 'fKey', 'fNewModel', 'fModelFilter', 'fRemark'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('fType').value = 'openai';
+  document.getElementById('fPriority').value = 0;
+  document.getElementById('fWeight').value = 1;
+  document.getElementById('fEnabled').checked = true;
+  document.getElementById('modelsField').style.display = '';
+  renderModelList('');
+  openModal('新建渠道', '*');
+});
+window.openEdit = function (id) {
+  const c = channels.find(x => x.id === id);
+  if (!c) return;
+  editingId = id;
+  editingCh = c;
+  buildModelState(c);
+  modelEditMode = 'checkbox';
+  document.getElementById('fName').value = c.name;
+  document.getElementById('fType').value = c.type;
+  document.getElementById('fBase').value = c.base_url;
+  document.getElementById('fKey').value = '';
+  document.getElementById('fPriority').value = c.priority;
+  document.getElementById('fWeight').value = c.weight;
+  document.getElementById('fRemark').value = c.remark || '';
+  document.getElementById('fEnabled').checked = c.enabled;
+  document.getElementById('fNewModel').value = '';
+  document.getElementById('fModelFilter').value = '';
+  document.getElementById('modelsField').style.display = '';
+  renderModelList('');
+  openModal(`编辑渠道 #${id}（${c.name}）`, '留空 = 沿用原密钥');
+};
+document.getElementById('mClose').addEventListener('click', closeModal);
+document.getElementById('mCancel').addEventListener('click', closeModal);
+document.querySelector('.modal-background').addEventListener('click', closeModal);
+
+document.getElementById('mSave').addEventListener('click', async () => {
+  // 勾选结果：勾选 = 启用模型，未勾 = 禁用模型
+  const models = [], disabled = [];
+  for (const [m, on] of modelState) (on ? models : disabled).push(m);
+  const body = {
+    name: document.getElementById('fName').value.trim(),
+    type: document.getElementById('fType').value,
+    base_url: document.getElementById('fBase').value.trim(),
+    api_key: document.getElementById('fKey').value.trim(),
+    models,
+    disabled_models: disabled,
+    weight: parseInt(document.getElementById('fWeight').value, 10) || 1,
+    priority: parseInt(document.getElementById('fPriority').value, 10) || 0,
+    enabled: document.getElementById('fEnabled').checked,
+    remark: document.getElementById('fRemark').value.trim(),
+  };
+  try {
+    if (editingId == null) await api('/api/admin/channels', { method: 'POST', body: JSON.stringify(body) });
+    else await api('/api/admin/channels/' + editingId, { method: 'PUT', body: JSON.stringify(body) });
+    closeModal(); toast('已保存'); load();
+  } catch (ex) { document.getElementById('mErr').textContent = ex.message; }
+});
+
+window.testCh = async function (id) {
+  toast('正在测试连通性…');
+  try {
+    // 该端点恒 200，测试结果在 body.ok
+    const r = await api(`/api/admin/channels/${id}/test`, { method: 'POST' });
+    if (r.ok) toast(`连通正常，上游模型 ${r.models} 个`);
+    else toast('连通失败：' + (r.error || '未知错误'), false);
+  } catch (ex) { toast('测试请求失败：' + ex.message, false); }
+};
+
+window.delCh = async function (id, name) {
+  if (!confirm(`确定删除渠道「${name}」（#${id}）？`)) return;
+  try { await api('/api/admin/channels/' + id, { method: 'DELETE' }); toast('已删除'); load(); }
+  catch (ex) { toast('删除失败：' + ex.message, false); }
+};
+
+load();
+</script>
+</body>
+</html>

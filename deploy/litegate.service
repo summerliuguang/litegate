@@ -1,0 +1,18 @@
+[Unit]
+Description=LiteGate AI 网关
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=liuguang
+WorkingDirectory=/home/liuguang/web-projects/litegate
+ExecStart=/home/liuguang/web-projects/litegate/litegate -addr 127.0.0.1:8080 -db /home/liuguang/.local/share/litegate/litegate.db
+EnvironmentFile=/home/liuguang/web-projects/litegate/deploy/litegate.env
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

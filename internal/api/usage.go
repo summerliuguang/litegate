@@ -118,9 +118,12 @@ func (s *sseUsageScanner) scanLine(line []byte) {
 // 否则 OpenAI 官方接口不在流式响应里报告 usage。客户端已自带 stream_options、
 // 或请求体不是 JSON 对象/非流式时不动作；上游不识别该字段时由 serve 里的
 // 400 回退逻辑去掉它对同一渠道重试一次。
+// 解析必须用 UseNumber：默认 float64 重组会把 >2^53 的整数改写成科学计数法。
 func injectStreamUsage(body []byte) ([]byte, bool) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
 	var v map[string]any
-	if json.Unmarshal(body, &v) != nil || v == nil {
+	if dec.Decode(&v) != nil || v == nil {
 		return body, false
 	}
 	if stream, _ := v["stream"].(bool); !stream {

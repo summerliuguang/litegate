@@ -36,7 +36,7 @@ func mustCreateChannel(t *testing.T, st *store.Store, typ, base string, models [
 
 func mustCreateKey(t *testing.T, st *store.Store) string {
 	t.Helper()
-	k, err := st.CreateAPIKey("test")
+	k, err := st.CreateAPIKey("test", nil)
 	if err != nil {
 		t.Fatalf("create key: %v", err)
 	}
