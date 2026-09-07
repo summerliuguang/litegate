@@ -484,6 +484,7 @@ func (p *proxy) serveResponses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
+	app := inboundApp(r)
 	// 流式请求补 stream_options.include_usage；上游 400 时对同渠道同密钥去掉重试一次
 	ab := &attemptBodies{current: chatBody, plain: chatBody}
 	if in.Stream {
@@ -499,7 +500,7 @@ func (p *proxy) serveResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "all channels failed"})
 		p.logRequest(ak, nil, "responses", in.Model, http.StatusBadGateway,
-			time.Since(start), time.Since(start), tokenUsage{}, errMsg(lastErr))
+			time.Since(start), time.Since(start), tokenUsage{}, errMsg(lastErr), app)
 		return
 	}
 
@@ -512,14 +513,14 @@ func (p *proxy) serveResponses(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(resp.StatusCode)
 		_, _ = io.Copy(w, resp.Body)
 		p.logRequest(ak, c, "responses", in.Model, resp.StatusCode,
-			time.Since(start), time.Since(start), tokenUsage{}, "")
+			time.Since(start), time.Since(start), tokenUsage{}, "", app)
 		return
 	}
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		p.respondResponsesStream(w, ak, c, &in, resp, start)
+		p.respondResponsesStream(w, ak, c, &in, resp, start, app)
 		return
 	}
-	p.respondResponsesJSON(w, ak, c, &in, resp, start)
+	p.respondResponsesJSON(w, ak, c, &in, resp, start, app)
 }
 
 // serveResponsesStored 网关无状态：对已存 Responses 对象的取回/删除明确报 501。
@@ -529,14 +530,14 @@ func (p *proxy) serveResponsesStored(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (p *proxy) respondResponsesJSON(w http.ResponseWriter, ak *store.APIKey, c *store.Channel,
-	in *responsesRequest, resp *http.Response, start time.Time) {
+	in *responsesRequest, resp *http.Response, start time.Time, app string) {
 	defer resp.Body.Close()
 	ttfb := time.Since(start)
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream response truncated"})
 		p.logRequest(ak, c, "responses", in.Model, http.StatusBadGateway,
-			time.Since(start), ttfb, tokenUsage{}, err.Error())
+			time.Since(start), ttfb, tokenUsage{}, err.Error(), app)
 		return
 	}
 	var cc chatCompletion
@@ -554,7 +555,7 @@ func (p *proxy) respondResponsesJSON(w http.ResponseWriter, ak *store.APIKey, c 
 			msg = cc.Error.Message
 		}
 		p.logRequest(ak, c, "responses", in.Model, resp.StatusCode,
-			time.Since(start), ttfb, cc.Usage.tokenUsage(), msg)
+			time.Since(start), ttfb, cc.Usage.tokenUsage(), msg, app)
 		return
 	}
 	out, err := json.Marshal(chatToResponses(in, &cc))
@@ -566,7 +567,7 @@ func (p *proxy) respondResponsesJSON(w http.ResponseWriter, ak *store.APIKey, c 
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
 	p.logRequest(ak, c, "responses", in.Model, http.StatusOK,
-		time.Since(start), ttfb, cc.Usage.tokenUsage(), "")
+		time.Since(start), ttfb, cc.Usage.tokenUsage(), "", app)
 }
 
 // ---------- 流式转换 ----------
@@ -783,7 +784,7 @@ func (t *responsesStreamTransformer) finish(w http.ResponseWriter, u tokenUsage,
 
 // respondResponsesStream 读上游 chat SSE 并写 Responses 事件流。
 func (p *proxy) respondResponsesStream(w http.ResponseWriter, ak *store.APIKey, c *store.Channel,
-	in *responsesRequest, resp *http.Response, start time.Time) {
+	in *responsesRequest, resp *http.Response, start time.Time, app string) {
 	defer resp.Body.Close()
 	ttfb := time.Since(start)
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -815,7 +816,7 @@ func (p *proxy) respondResponsesStream(w http.ResponseWriter, ak *store.APIKey, 
 	if err != nil {
 		msg = err.Error()
 	}
-	p.logRequest(ak, c, "responses", in.Model, http.StatusOK, time.Since(start), ttfb, u, msg)
+	p.logRequest(ak, c, "responses", in.Model, http.StatusOK, time.Since(start), ttfb, u, msg, app)
 }
 
 // ---------- count_tokens ----------

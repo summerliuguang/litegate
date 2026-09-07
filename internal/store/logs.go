@@ -1,6 +1,9 @@
 package store
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 type RequestLog struct {
 	ID               int64   `json:"id"`
@@ -9,6 +12,7 @@ type RequestLog struct {
 	ChannelID        int64   `json:"channel_id"`
 	Model            string  `json:"model"`
 	Protocol         string  `json:"protocol"`
+	App              string  `json:"app"`
 	Status           int     `json:"status"`
 	LatencyMs        int64   `json:"latency_ms"`
 	TtfbMs           int64   `json:"ttfb_ms"`
@@ -21,10 +25,10 @@ type RequestLog struct {
 
 func (s *Store) InsertRequestLog(l *RequestLog) error {
 	res, err := s.DB.Exec(
-		`INSERT INTO request_logs(api_key_id, channel_id, model, protocol, status,
+		`INSERT INTO request_logs(api_key_id, channel_id, model, protocol, app, status,
 		     latency_ms, ttfb_ms, prompt_tokens, completion_tokens, cache_tokens, cost, error)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		l.APIKeyID, l.ChannelID, l.Model, l.Protocol, l.Status,
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		l.APIKeyID, l.ChannelID, l.Model, l.Protocol, l.App, l.Status,
 		l.LatencyMs, l.TtfbMs, l.PromptTokens, l.CompletionTokens, l.CacheTokens, l.CostUSD, l.Error,
 	)
 	if err != nil {
@@ -40,6 +44,7 @@ type LogFilter struct {
 	ChannelID     int64
 	APIKeyID      int64
 	Model         string
+	App           string
 	Status        string // ""=全部，"ok"=成功，"error"=失败
 	Since, Until  string // "YYYY-MM-DD HH:MM:SS"，与 ts（UTC 文本）做字典序比较
 }
@@ -63,7 +68,7 @@ func (s *Store) ListLogs(f LogFilter) (*LogPage, error) {
 		f.Offset = 0
 	}
 	rows, err := s.DB.Query(
-		`SELECT id, ts, api_key_id, channel_id, model, protocol, status,
+		`SELECT id, ts, api_key_id, channel_id, model, protocol, app, status,
 		        latency_ms, ttfb_ms, prompt_tokens, completion_tokens, cache_tokens, cost, error
 		 FROM request_logs` + where + ` ORDER BY id DESC LIMIT ? OFFSET ?`,
 		append(args, f.Limit, f.Offset)...)
@@ -74,7 +79,7 @@ func (s *Store) ListLogs(f LogFilter) (*LogPage, error) {
 	for rows.Next() {
 		var l RequestLog
 		if err := rows.Scan(&l.ID, &l.Ts, &l.APIKeyID, &l.ChannelID, &l.Model,
-			&l.Protocol, &l.Status, &l.LatencyMs, &l.TtfbMs,
+			&l.Protocol, &l.App, &l.Status, &l.LatencyMs, &l.TtfbMs,
 			&l.PromptTokens, &l.CompletionTokens, &l.CacheTokens, &l.CostUSD, &l.Error); err != nil {
 			return nil, err
 		}
@@ -98,6 +103,10 @@ func (f LogFilter) where() (string, []any) {
 		conds = append(conds, "model = ?")
 		args = append(args, f.Model)
 	}
+	if f.App != "" {
+		conds = append(conds, "app = ?")
+		args = append(args, f.App)
+	}
 	switch f.Status {
 	case "ok":
 		conds = append(conds, "status < 400 AND error = ''")
@@ -116,4 +125,18 @@ func (f LogFilter) where() (string, []any) {
 		return "", nil
 	}
 	return " WHERE " + strings.Join(conds, " AND "), args
+}
+
+// PruneLogs 删除 days 天前的请求日志，返回删除行数；days <= 0 时不删除。
+// 由调用方按保留策略周期性调用（SQLite 单连接，删除大表时段短暂占用写锁）。
+func (s *Store) PruneLogs(days int) (int64, error) {
+	if days <= 0 {
+		return 0, nil
+	}
+	res, err := s.DB.Exec(`DELETE FROM request_logs WHERE ts < datetime('now', ?)`,
+		fmt.Sprintf("-%d days", days))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }

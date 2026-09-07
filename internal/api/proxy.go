@@ -115,6 +115,7 @@ func (p *proxy) serve(w http.ResponseWriter, r *http.Request, protocol, upstream
 	}
 
 	start := time.Now()
+	app := inboundApp(r)
 	// openai 流式请求补 stream_options.include_usage 以获取 usage；上游不识别时回退重试
 	ab := &attemptBodies{current: body, plain: body}
 	if protocol == "openai" {
@@ -130,10 +131,20 @@ func (p *proxy) serve(w http.ResponseWriter, r *http.Request, protocol, upstream
 			log.Printf("proxy %s %s failed: %v", r.Method, upstreamPath, lastErr)
 		}
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "all channels failed"})
-		p.logRequest(ak, nil, protocol, model, http.StatusBadGateway, time.Since(start), time.Since(start), tokenUsage{}, errMsg(lastErr))
+		p.logRequest(ak, nil, protocol, model, http.StatusBadGateway, time.Since(start), time.Since(start), tokenUsage{}, errMsg(lastErr), app)
 		return
 	}
-	p.respond(w, ak, c, protocol, model, resp, start)
+	p.respond(w, ak, c, protocol, model, resp, start, app)
+}
+
+// inboundApp 提取应用归因头：客户端可选自带 X-LiteGate-App 标记调用方，
+// 日志与用量按它分摊。截断到 64 字节防滥用。
+func inboundApp(r *http.Request) string {
+	app := strings.TrimSpace(r.Header.Get("X-LiteGate-App"))
+	if len(app) > 64 {
+		app = app[:64]
+	}
+	return app
 }
 
 const maxProxyAttempts = 4
@@ -283,7 +294,7 @@ func (p *proxy) attemptUpstream(r *http.Request, c *store.Channel, key, path str
 // respond 把上游响应回写给客户端；进入此函数后不再故障转移。
 // 同时被动提取 usage：流式靠 sseUsageScanner 逐行嗅探，非流式保留响应体
 // 末尾 64KB（usage 位于 JSON 尾部）等复制完成后再解析。
-func (p *proxy) respond(w http.ResponseWriter, ak *store.APIKey, c *store.Channel, protocol, model string, resp *http.Response, start time.Time) {
+func (p *proxy) respond(w http.ResponseWriter, ak *store.APIKey, c *store.Channel, protocol, model string, resp *http.Response, start time.Time, app string) {
 	defer resp.Body.Close()
 	ttfb := time.Since(start) // 上游返回响应头的耗时，近似上游首包延迟
 	ct := resp.Header.Get("Content-Type")
@@ -307,7 +318,7 @@ func (p *proxy) respond(w http.ResponseWriter, ak *store.APIKey, c *store.Channe
 	if err != nil {
 		errMsg = err.Error()
 	}
-	p.logRequest(ak, c, protocol, model, resp.StatusCode, time.Since(start), ttfb, u, errMsg)
+	p.logRequest(ak, c, protocol, model, resp.StatusCode, time.Since(start), ttfb, u, errMsg, app)
 }
 
 // authenticate 校验下游虚拟密钥：Authorization: Bearer 或 X-Api-Key（Claude Code 风格）。
@@ -470,9 +481,12 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 
 func (t *tailBuffer) bytes() []byte { return t.buf }
 
-func (p *proxy) logRequest(ak *store.APIKey, c *store.Channel, protocol, model string, status int, total, ttfb time.Duration, u tokenUsage, errMsg string) {
+func (p *proxy) logRequest(ak *store.APIKey, c *store.Channel, protocol, model string, status int, total, ttfb time.Duration, u tokenUsage, errMsg string, app string) {
 	if len(errMsg) > 512 {
 		errMsg = errMsg[:512]
+	}
+	if len(app) > 64 {
+		app = app[:64]
 	}
 	var price *store.ModelPrice
 	if u.prompt > 0 || u.completion > 0 {
@@ -481,7 +495,7 @@ func (p *proxy) logRequest(ak *store.APIKey, c *store.Channel, protocol, model s
 	cost := store.CostOf(price, u.prompt, u.cacheRead, u.cacheWrite, u.completion)
 	p.limits.record(ak, u.prompt, u.completion, cost)
 	l := &store.RequestLog{
-		Model: model, Protocol: protocol, Status: status,
+		Model: model, Protocol: protocol, App: app, Status: status,
 		LatencyMs: total.Milliseconds(), TtfbMs: ttfb.Milliseconds(),
 		PromptTokens: u.prompt, CompletionTokens: u.completion, CacheTokens: u.cacheRead,
 		CostUSD: cost,

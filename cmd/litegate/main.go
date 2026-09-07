@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -23,7 +24,13 @@ import (
 func main() {
 	addr := flag.String("addr", ":8080", "监听地址，如 :8080 或 127.0.0.1:8080")
 	dbPath := flag.String("db", "litegate.db", "SQLite 数据库文件路径")
+	showVersion := flag.Bool("version", false, "打印版本号并退出")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(api.Version)
+		return
+	}
 
 	cfg, err := config.Load(*addr, *dbPath)
 	if err != nil {
@@ -54,6 +61,23 @@ func main() {
 
 	handler := api.NewServer(st, cfg.AdminPassword, web.Handler())
 	api.StartKeyHealthChecker(st, 2*time.Minute)
+
+	// 日志保留策略：启动时清一次，之后每 6 小时清一次；0 天（默认）= 永久保留
+	if cfg.LogRetentionDays > 0 {
+		go func(days int) {
+			ticker := time.NewTicker(6 * time.Hour)
+			defer ticker.Stop()
+			for {
+				if n, err := st.PruneLogs(days); err != nil {
+					log.Printf("清理 %d 天前日志失败: %v", days, err)
+				} else if n > 0 {
+					log.Printf("已清理 %d 天前的请求日志 %d 条", days, n)
+				}
+				<-ticker.C
+			}
+		}(cfg.LogRetentionDays)
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           handler,
@@ -74,7 +98,7 @@ func main() {
 	if strings.HasPrefix(display, ":") {
 		display = "localhost" + display
 	}
-	log.Printf("LiteGate 已启动：http://%s （管理页面与管理 API 同端口，数据库 %s）", display, cfg.DBPath)
+	log.Printf("LiteGate %s 已启动：http://%s （管理页面与管理 API 同端口，数据库 %s）", api.Version, display, cfg.DBPath)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("listen: %v", err)
 	}

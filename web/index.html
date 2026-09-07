@@ -36,6 +36,29 @@
     </div></div></div>
   </div>
 
+  <div class="tile is-ancestor">
+    <div class="tile is-parent"><div class="tile is-child card"><div class="card-content has-text-centered">
+      <p class="heading">延迟 P50 / P95</p>
+      <p class="stat-num" id="vP50">--</p>
+      <p class="has-text-grey is-size-7" id="vP95">P95 --</p>
+    </div></div></div>
+    <div class="tile is-parent"><div class="tile is-child card"><div class="card-content has-text-centered">
+      <p class="heading">实时 RPM / TPM</p>
+      <p class="stat-num" id="vRpm">--</p>
+      <p class="has-text-grey is-size-7" id="vTpm">TPM --（最近 60 秒）</p>
+    </div></div></div>
+    <div class="tile is-parent"><div class="tile is-child card"><div class="card-content has-text-centered">
+      <p class="heading">平均生成速度</p>
+      <p class="stat-num" id="vTps">--</p>
+      <p class="has-text-grey is-size-7">输出 token/秒（今日成功请求）</p>
+    </div></div></div>
+    <div class="tile is-parent"><div class="tile is-child card"><div class="card-content has-text-centered">
+      <p class="heading">网关版本</p>
+      <p class="stat-num" id="vVer" style="font-size:1.6rem">--</p>
+      <p class="has-text-grey is-size-7" id="vUptime">运行 --</p>
+    </div></div></div>
+  </div>
+
   <div class="card" style="margin-bottom:1.2rem">
     <div class="card-content">
       <h2 class="title is-5">近 7 天请求</h2>
@@ -65,6 +88,16 @@
           </table></div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div class="card" id="byAppCard" style="display:none">
+    <div class="card-content">
+      <h2 class="title is-5">今日按应用分摊<span class="has-text-grey is-size-7" style="margin-left:.5rem">客户端带 <code>X-LiteGate-App</code> 头即可归因</span></h2>
+      <div class="table-container"><table class="table is-fullwidth is-size-7">
+        <thead><tr><th>应用</th><th>请求</th><th>输入</th><th>输出</th><th>成本</th></tr></thead>
+        <tbody id="byApp"></tbody>
+      </table></div>
     </div>
   </div>
 </div>
@@ -106,6 +139,36 @@ async function load() {
       : '<tr><td colspan="4" class="has-text-grey">暂无数据</td></tr>';
     document.getElementById('byChannel').innerHTML = bc.length ? bc.map(usageRow).join('')
       : '<tr><td colspan="4" class="has-text-grey">暂无数据</td></tr>';
+
+    // 实时与延迟指标
+    document.getElementById('vP50').textContent = d.latency_p50_ms ? d.latency_p50_ms + 'ms' : '--';
+    document.getElementById('vP95').textContent = 'P95 ' + (d.latency_p95_ms ? d.latency_p95_ms + 'ms' : '--');
+    document.getElementById('vRpm').textContent = fmtInt(d.rpm);
+    document.getElementById('vTpm').textContent = 'TPM ' + fmtTok(d.tpm) + '（最近 60 秒）';
+    document.getElementById('vTps').textContent = d.avg_tps ? d.avg_tps.toFixed(1) + ' tok/s' : '--';
+
+    // 版本与运行时长（healthz?deep=1）
+    try {
+      const h = await api('/healthz?deep=1');
+      document.getElementById('vVer').textContent = h.version || 'dev';
+      const up = Number(h.uptime_seconds) || 0;
+      document.getElementById('vUptime').textContent = up >= 86400
+        ? `运行 ${Math.floor(up / 86400)} 天 ${Math.floor(up % 86400 / 3600)} 小时`
+        : `运行 ${Math.floor(up / 3600)} 小时 ${Math.floor(up % 3600 / 60)} 分`;
+    } catch (_) { document.getElementById('vUptime').textContent = 'deep 检查不可用'; }
+
+    // 今日按应用分摊
+    const apps = d.by_app || [];
+    const card = document.getElementById('byAppCard');
+    if (apps.length && (apps.length > 1 || apps[0].app !== '(未标注)')) {
+      card.style.display = '';
+      document.getElementById('byApp').innerHTML = apps.map(a =>
+        `<tr><td class="mono">${esc(a.app)}</td><td>${fmtInt(a.requests)}</td>` +
+        `<td>${fmtTok(a.prompt_tokens)}</td><td>${fmtTok(a.completion_tokens)}</td>` +
+        `<td>${fmtUSD(a.cost_usd)}</td></tr>`).join('');
+    } else {
+      card.style.display = 'none';
+    }
   } catch (ex) { toast('加载失败：' + ex.message, false); }
 }
 load();

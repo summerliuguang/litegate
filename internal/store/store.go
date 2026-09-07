@@ -16,6 +16,7 @@ import (
 type Store struct {
 	DB     *sql.DB
 	secret []byte
+	path   string // 数据库文件路径，备份目录按它推导
 }
 
 var ErrNotFound = errors.New("record not found")
@@ -63,6 +64,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
 	channel_id        INTEGER NOT NULL DEFAULT 0,
 	model             TEXT NOT NULL DEFAULT '',
 	protocol          TEXT NOT NULL DEFAULT '',
+	app               TEXT NOT NULL DEFAULT '',
 	status            INTEGER NOT NULL DEFAULT 0,
 	latency_ms        INTEGER NOT NULL DEFAULT 0,
 	prompt_tokens     INTEGER NOT NULL DEFAULT 0,
@@ -104,7 +106,7 @@ func Open(path string, secret []byte) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
-	s := &Store{DB: db}
+	s := &Store{DB: db, path: path}
 	key, err := s.loadOrCreateSecret(secret)
 	if err != nil {
 		db.Close()
@@ -145,6 +147,7 @@ func migrate(db *sql.DB) error {
 		{"request_logs", "ttfb_ms", `ALTER TABLE request_logs ADD COLUMN ttfb_ms INTEGER NOT NULL DEFAULT 0`},
 		{"channels", "disabled_models", `ALTER TABLE channels ADD COLUMN disabled_models TEXT NOT NULL DEFAULT '[]'`},
 		{"channels", "model_map", `ALTER TABLE channels ADD COLUMN model_map TEXT NOT NULL DEFAULT '{}'`},
+		{"request_logs", "app", `ALTER TABLE request_logs ADD COLUMN app TEXT NOT NULL DEFAULT ''`},
 		{"api_keys", "allowed_models", `ALTER TABLE api_keys ADD COLUMN allowed_models TEXT NOT NULL DEFAULT '[]'`},
 		{"api_keys", "expires_at", `ALTER TABLE api_keys ADD COLUMN expires_at TEXT NOT NULL DEFAULT ''`},
 		{"api_keys", "rpm_limit", `ALTER TABLE api_keys ADD COLUMN rpm_limit INTEGER NOT NULL DEFAULT 0`},

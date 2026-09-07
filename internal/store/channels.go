@@ -308,6 +308,23 @@ func (s *Store) GetChannel(id int64) (*Channel, error) {
 	return c, nil
 }
 
+// GetChannelByName 按名称取渠道（配置导入按名字 upsert 用）；不存在返回 ErrNotFound。
+func (s *Store) GetChannelByName(name string) (*Channel, error) {
+	c, err := s.scanChannel(s.DB.QueryRow(
+		`SELECT id, name, type, base_url, models, disabled_models, model_map, weight, priority, enabled, remark, created_at
+		 FROM channels WHERE name = ?`, name,
+	))
+	if err != nil {
+		return nil, err
+	}
+	keys, err := s.loadChannelKeys([]int64{c.ID})
+	if err != nil {
+		return nil, err
+	}
+	c.APIKeys = keys[c.ID]
+	return c, nil
+}
+
 // ListChannels 按 type 过滤（空串表示全部），优先级高的在前。
 func (s *Store) ListChannels(typ string) ([]Channel, error) {
 	q := `SELECT id, name, type, base_url, models, disabled_models, model_map, weight, priority, enabled, remark, created_at FROM channels`

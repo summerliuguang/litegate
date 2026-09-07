@@ -17,6 +17,8 @@
       <div class="columns is-multiline is-variable is-1">
         <div class="column is-2"><label class="label is-size-7">模型</label>
           <input class="input is-small mono" id="qModel" placeholder="精确匹配"></div>
+        <div class="column is-2"><label class="label is-size-7">应用</label>
+          <input class="input is-small mono" id="qApp" placeholder="X-LiteGate-App"></div>
         <div class="column is-2"><label class="label is-size-7">状态</label>
           <div class="control select is-small is-fullwidth"><select id="qStatus">
             <option value="">全部</option><option value="ok">成功</option><option value="error">失败</option>
@@ -89,12 +91,14 @@ function localToUTC(s) {
 function buildQuery() {
   const q = new URLSearchParams();
   const model = document.getElementById('qModel').value.trim();
+  const app = document.getElementById('qApp').value.trim();
   const status = document.getElementById('qStatus').value;
   const ch = document.getElementById('qChannel').value;
   const key = document.getElementById('qKey').value;
   const since = localToUTC(document.getElementById('qSince').value);
   const until = localToUTC(document.getElementById('qUntil').value);
   if (model) q.set('model', model);
+  if (app) q.set('app', app);
   if (status) q.set('status', status);
   if (ch) q.set('channel_id', ch);
   if (key) q.set('api_key_id', key);
@@ -118,7 +122,7 @@ async function load() {
       const keyName = (keys.find(k => k.id === l.api_key_id) || {}).name || ('#' + l.api_key_id);
       return `<tr ${l.error ? `style="cursor:pointer" title="点击查看错误详情" onclick="showErr('${String(l.id)}', this)" data-err="${esc(l.error)}"` : ''}>
         <td class="mono">${fmtTs(l.ts)}</td>
-        <td class="mono">${esc(l.model)}</td>
+        <td class="mono">${esc(l.model)}${l.app ? ` <span class="tag is-link is-light is-size-7" style="margin-left:.3rem">${esc(l.app)}</span>` : ''}</td>
         <td><span class="tag is-light">${esc(l.protocol)}</span></td>
         <td>${isErr ? `<span class="status bad">${l.status}</span>` : `<span class="status ok">${l.status}</span>`}</td>
         <td class="mono">${l.latency_ms}ms / ${l.ttfb_ms}ms</td>
@@ -149,7 +153,7 @@ document.querySelector('#errModal .modal-background').addEventListener('click', 
 
 document.getElementById('formFilter').addEventListener('submit', e => { e.preventDefault(); offset = 0; load(); });
 document.getElementById('btnReset').addEventListener('click', () => {
-  ['qModel', 'qChannel', 'qKey', 'qSince', 'qUntil'].forEach(id => document.getElementById(id).value = '');
+  ['qModel', 'qApp', 'qChannel', 'qKey', 'qSince', 'qUntil'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('qStatus').value = '';
   offset = 0; load();
 });

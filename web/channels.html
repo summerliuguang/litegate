@@ -53,6 +53,7 @@
         <div class="is-flex" style="gap:.5rem;margin-bottom:.4rem">
           <input class="input is-small mono" id="fNewModel" placeholder="添加新模型名，回车或点添加" style="flex:1">
           <button class="button is-small" type="button" id="btnAddModel">添加</button>
+          <button class="button is-small is-link is-light" type="button" id="btnDiscover" title="仅已保存的渠道可用：拉取上游 /models 列表并入勾选区">从上游拉取</button>
         </div>
         <input class="input is-small mono" id="fModelFilter" placeholder="搜索模型…" style="margin-bottom:.4rem">
         <div id="modelList" style="max-height:240px;overflow-y:auto;border:1px solid var(--line,#e8eaf0);border-radius:8px;padding:.4rem .6rem"></div>
@@ -202,6 +203,22 @@ function addModel() {
 }
 document.getElementById('btnAddModel').addEventListener('click', addModel);
 document.getElementById('fNewModel').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addModel(); } });
+
+// 从上游拉取模型列表并入勾选区（默认全部勾选=启用；只在已保存渠道上可用）
+document.getElementById('btnDiscover').addEventListener('click', async () => {
+  if (editingId == null) { toast('请先保存渠道，再从上游拉取模型列表', false); return; }
+  toast('正在拉取上游模型列表…');
+  try {
+    const r = await api(`/api/admin/channels/${editingId}/discover`);
+    if (!r.ok) { toast('拉取失败：' + (r.error || '未知错误'), false); return; }
+    let added = 0;
+    for (const m of r.models || []) {
+      if (!modelState.has(m)) { modelState.set(m, true); added++; }
+    }
+    renderModelList('');
+    toast(`上游共 ${r.models.length} 个模型，新增 ${added} 个（已默认勾选启用）`);
+  } catch (ex) { toast('拉取请求失败：' + ex.message, false); }
+});
 
 document.getElementById('btnNew').addEventListener('click', () => {
   editingId = null;

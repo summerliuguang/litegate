@@ -9,6 +9,11 @@ import (
 	"litegate/internal/store"
 )
 
+// Version 由 main 通过 ldflags 注入（-X litegate/internal/api.Version=vx.y.z）。
+var Version = "dev"
+
+var startedAt = time.Now()
+
 // NewServer 组装全部路由。webHandler 为内嵌管理页（可为 nil，便于测试）。
 func NewServer(st *store.Store, adminPassword string, webHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
@@ -35,8 +40,26 @@ func NewServer(st *store.Store, adminPassword string, webHandler http.Handler) h
 	a.invalidateModels = p.invalidateModelsCache
 	a.invalidatePrices = p.invalidatePriceCache
 
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("deep") == "" {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+			return
+		}
+		// 深度检查：真实读一次库，附带版本与运行时长
+		deep := map[string]any{
+			"status":         "ok",
+			"version":        Version,
+			"uptime_seconds": int64(time.Since(startedAt).Seconds()),
+		}
+		var one int
+		if err := st.DB.QueryRow(`SELECT 1`).Scan(&one); err != nil {
+			deep["status"] = "fail"
+			deep["db"] = err.Error()
+			writeJSON(w, http.StatusServiceUnavailable, deep)
+			return
+		}
+		deep["db"] = "ok"
+		writeJSON(w, http.StatusOK, deep)
 	})
 
 	if webHandler != nil {

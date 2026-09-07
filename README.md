@@ -11,7 +11,7 @@
 - 用量统计：请求级 Token 计量（含 prompt caching 缓存 token，读按 1/10 价计费）、成本核算（模型价格可配）、日志过滤分页、用量看板（今日/近 7 天/按渠道/按模型）
 - 内嵌管理页面与管理 API：渠道 CRUD、连通性测试、虚拟密钥、请求日志、用量看板
 
-> 设计文档见 [docs/DESIGN.md](docs/DESIGN.md)。M1 数据面、M2 用量统计、M2.5 管理台与安全加固、M3 协议补齐（Responses API / count_tokens / prompt caching 计费）、M4 渠道与密钥治理已交付；下一步 M5 可观测与运维。
+> 设计文档见 [docs/DESIGN.md](docs/DESIGN.md)。M1–M5 已全部交付（数据面 / 用量统计 / 管理台与安全加固 / 协议补齐 / 渠道密钥治理 / 可观测与运维）；后续 M6+ 按需推进。
 
 ## 构建
 
@@ -19,6 +19,8 @@
 
 ```bash
 go build -trimpath -ldflags="-s -w" -o litegate ./cmd/litegate
+# 带版本号（`-version` 与 /healthz?deep=1 会显示）：
+go build -trimpath -ldflags="-s -w -X litegate/internal/api.Version=v1.0.0" -o litegate ./cmd/litegate
 ```
 
 交叉编译示例（默认无 CGO 依赖）：
@@ -100,7 +102,12 @@ POST   /api/admin/channels              新建渠道（api_keys 数组 = 多把�
 PUT    /api/admin/channels/{id}         更新（api_keys 未传 = 密钥不动；传了 = 全量替换，启停状态保留）
 DELETE /api/admin/channels/{id}
 POST   /api/admin/channels/{id}/test    连通性测试（逐密钥返回结果）
+GET    /api/admin/channels/{id}/discover 拉取上游 /models 模型列表（回填管理页勾选区）
 POST   /api/admin/channels/{id}/keys/{key_id}/enable|disable   手动启停单把渠道密钥
+POST   /api/admin/db/backup             在线备份（VACUUM INTO，存数据库同级 backups/）
+GET    /api/admin/db/backups            备份文件列表
+GET    /api/admin/config/export         导出渠道+价格 JSON（include_keys=1 才含明文密钥）
+POST   /api/admin/config/import         导入（渠道按 name upsert，未给密钥沿用原值）
 GET    /api/admin/keys                  虚拟密钥列表
 POST   /api/admin/keys                  签发密钥 {name, allowed_models, rpm_limit, tpm_limit,
                                         budget_usd, budget_period, budget_tokens, expires_at}
@@ -123,8 +130,10 @@ POST /v1/messages/count_tokens  Anthropic token 计数（anthropic 渠道转发�
 POST /v1/responses            OpenAI Responses 协议：请求转 chat 走渠道路由，响应/SSE 转回
                               Responses 格式；无状态（store 忽略、previous_response_id 报 400）
 GET  /v1/models               聚合各渠道模型列表（缓存 60s）
-GET  /healthz
+GET  /healthz                 存活检查；`?deep=1` 返回版本/运行时长/数据库状态
 ```
+
+请求日志支持 `X-LiteGate-App` 请求头应用归因：客户端自带该头即可在日志与仪表盘按应用分摊用量与成本。日志保留策略默认永久，设 `LITEGATE_LOG_RETENTION_DAYS=<天数>` 后每 6 小时自动清理过期日志。
 
 ### Token 计量说明
 
@@ -153,8 +162,10 @@ go test ./...
 - [x] M4 渠道与密钥治理：渠道多 key 池（加权轮询、401/403 自动换 key、连续失败指数冷却、
       后台巡检恢复）、模型映射别名、虚拟密钥 RPM/TPM 限速 + 日/月美元/token 预算 + 过期时间、
       多 key 渠道把上游 401/403 视为密钥问题自动轮换
-- [ ] M5 可观测与运维：TTFT/延迟分位、按密钥/应用用量分摊、SQLite 运维、配置导入导出
-- [ ] M6+ 按需：`/mcp` 透传、rerank、精确响应缓存、Agent 一键接入配置生成
+- [x] M5 可观测与运维：仪表盘 P50/P95 延迟、实时 RPM/TPM、平均生成速度、按应用（`X-LiteGate-App`）
+      分摊；SQLite 在线备份与列表、日志保留策略（`LITEGATE_LOG_RETENTION_DAYS`）、深度 healthz、
+      版本注入（`-version`）；配置导出/导入（密钥可选）、渠道模型自动发现
+- [ ] M6+ 按需：`/mcp` 透传、rerank、精确响应缓存、Agent 一键接入配置生成、Prometheus /metrics
 
 明确不做：语义缓存、插件运行时、K8s/分布式、用户系统/充值、全链路 trace、AI 智能路由、Vue3、i18n、Gemini 原生出站适配（依据与细则见 docs/DESIGN.md）。
 

@@ -44,6 +44,11 @@ func (a *admin) register(mux *http.ServeMux) {
 	mux.Handle("PUT /api/admin/keys/{id}", a.auth(a.updateKey))
 	mux.Handle("GET /api/admin/keys/{id}/reveal", a.auth(a.revealKey))
 	mux.Handle("DELETE /api/admin/keys/{id}", a.auth(a.deleteKey))
+	mux.Handle("GET /api/admin/channels/{id}/discover", a.auth(a.discoverChannelModels))
+	mux.Handle("POST /api/admin/db/backup", a.auth(a.backupDB))
+	mux.Handle("GET /api/admin/db/backups", a.auth(a.listBackups))
+	mux.Handle("GET /api/admin/config/export", a.auth(a.exportConfig))
+	mux.Handle("POST /api/admin/config/import", a.auth(a.importConfig))
 	mux.Handle("GET /api/admin/logs", a.auth(a.listLogs))
 	mux.Handle("GET /api/admin/prices", a.auth(a.listPrices))
 	mux.Handle("PUT /api/admin/prices", a.auth(a.upsertPrice))
@@ -560,6 +565,7 @@ func (a *admin) listLogs(w http.ResponseWriter, r *http.Request) {
 		Limit:  limit,
 		Offset: offset,
 		Model:  q.Get("model"),
+		App:    q.Get("app"),
 		Status: q.Get("status"),
 		Since:  q.Get("since"),
 		Until:  q.Get("until"),

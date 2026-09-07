@@ -1,6 +1,6 @@
 # LiteGate —— 轻量级 AI 网关 研究报告与设计方案
 
-> 调研日期：2026-09-04 ｜ 状态：M1/M2/M2.5/M3/M4 已交付；下一步 M5 可观测与运维
+> 调研日期：2026-09-04 ｜ 状态：M1–M5 已全部交付；M6+ 按需推进
 > 一句话定位：**把 LiteLLM 的网关能力和 cc-switch 的"供应商切换"体验，装进一个 ~20MB 的单二进制 + 内嵌 Web UI 里。**
 
 ---
@@ -263,12 +263,20 @@ GET  /healthz
       密钥编辑弹窗限额/预算/有效期字段
 - 会话亲和（sticky）顺延至 M6+（家庭场景多 key 池主要摊限额，亲和收益小）
 
-### M5 —— 可观测与运维
-- [ ] 日志与看板：TTFT / tokens/s 入日志，P50/P95 延迟、RPM/TPM 实时指标
-- [ ] 用量分摊：按虚拟密钥分摊成本、应用归因（`X-LiteGate-App` 请求头按应用聚合）
-- [ ] SQLite 运维包：在线备份（VACUUM INTO）、日志保留策略、深度 healthz、版本信息注入
-- [ ] 配置导入导出：渠道 + 价格 JSON（密钥可选脱敏）、渠道模型列表自动发现
-- [ ] 可选：Prometheus `/metrics`
+### M5 —— 可观测与运维（✅ 已完成 2026-09-08）
+- [x] 仪表盘增强：延迟 P50/P95（今日成功请求）、实时 RPM/TPM（最近 60 秒）、平均生成速度
+      （输出 token/s，由 ttfb 推算生成时长）
+- [x] 应用归因：`X-LiteGate-App` 请求头（截断 64 字节）入日志 `app` 列，仪表盘"今日按应用分摊"，
+      日志接口支持 `app=` 过滤
+- [x] SQLite 运维包：`POST /api/admin/db/backup` 在线备份（VACUUM INTO，存数据库同级 backups/）+
+      备份列表；日志保留策略 `LITEGATE_LOG_RETENTION_DAYS`（默认 0 永久，>0 时启动+每 6 小时清理）；
+      深度 healthz（`?deep=1` 返回版本/运行时长/数据库状态，失败 503）；版本注入
+      （ldflags `-X litegate/internal/api.Version`，`-version` 可打印）
+- [x] 配置导入导出：`GET /api/admin/config/export`（渠道+价格 JSON，默认密钥打码，
+      `include_keys=1` 才含明文——产出等同凭证）；`POST /api/admin/config/import`（渠道按 name
+      upsert，未给密钥沿用原值）；渠道模型自动发现 `GET /api/admin/channels/{id}/discover`
+      + 管理页"从上游拉取"按钮
+- Prometheus `/metrics` 仍为可选项未实现（本机暂无 Prometheus 抓取端，需要时再加）
 
 ### M6+ —— 观察后按需
 - [ ] `/mcp` 最小透传聚合（streamable HTTP 转发 + 按 key 工具白名单）
