@@ -1,0 +1,8 @@
+[Unit]
+Description=LiteGate 数据库在线备份（管理 API 触发 VACUUM INTO）
+After=litegate.service
+
+[Service]
+Type=oneshot
+User=liuguang
+ExecStart=/usr/bin/bash /home/liuguang/web-projects/litegate/deploy/backup.sh

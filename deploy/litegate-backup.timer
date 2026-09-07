@@ -1,0 +1,10 @@
+[Unit]
+Description=LiteGate 每日 04:30 数据库备份
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
