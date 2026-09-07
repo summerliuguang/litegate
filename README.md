@@ -3,14 +3,14 @@
 轻量级 AI 网关：把多个大模型供应商/中转站收敛到一个入口，带 Web 管理页面。
 对标 LiteLLM（网关能力）与 cc-switch（供应商切换体验），但只做一件事：**单二进制、低占用、开箱即用**。
 
-- **单二进制 ~11MB**，空载内存 ~20MB，无 Python / Node 运行时，**不依赖 Docker**
+- **单二进制 ~12MB**，空载内存 ~20MB，无 Python / Node 运行时，**不依赖 Docker**
 - 默认 SQLite（WAL），零外部服务；凭证 AES-256-GCM 加密存储
-- 下游协议：OpenAI（`/v1/chat/completions`、`/v1/embeddings`）、Anthropic（`/v1/messages`，Claude Code 可直连）
+- 下游协议：OpenAI（`/v1/chat/completions`、`/v1/embeddings`、`/v1/responses`）、Anthropic（`/v1/messages`、`/v1/messages/count_tokens`，Claude Code 可直连）；Responses 桥接到 chat 渠道，Codex 等原生 Responses 客户端可用
 - 上游渠道：OpenAI 兼容 / Anthropic 兼容，多渠道加权轮询、按优先级故障转移
-- 用量统计：请求级 Token 计量、成本核算（模型价格可配）、日志过滤分页、用量看板（今日/近 7 天/按渠道/按模型）
+- 用量统计：请求级 Token 计量（含 prompt caching 缓存 token，读按 1/10 价计费）、成本核算（模型价格可配）、日志过滤分页、用量看板（今日/近 7 天/按渠道/按模型）
 - 内嵌管理页面与管理 API：渠道 CRUD、连通性测试、虚拟密钥、请求日志、用量看板
 
-> 设计文档见 [docs/DESIGN.md](docs/DESIGN.md)。M1 数据面、M2 用量统计、M2.5 内嵌管理台与安全加固已交付；下一步 M3 协议补齐（Responses API / count_tokens / prompt caching 计费）。
+> 设计文档见 [docs/DESIGN.md](docs/DESIGN.md)。M1 数据面、M2 用量统计、M2.5 管理台与安全加固、M3 协议补齐（Responses API / count_tokens / prompt caching 计费）已交付；下一步 M4 渠道与密钥治理。
 
 ## 构建
 
@@ -115,6 +115,9 @@ DELETE /api/admin/prices/{model...}     删除价格
 POST /v1/chat/completions     OpenAI 协议（支持 stream）
 POST /v1/embeddings
 POST /v1/messages             Anthropic 协议（鉴权可用 x-api-key 头）
+POST /v1/messages/count_tokens  Anthropic token 计数（anthropic 渠道转发精确值，其余本地估算）
+POST /v1/responses            OpenAI Responses 协议：请求转 chat 走渠道路由，响应/SSE 转回
+                              Responses 格式；无状态（store 忽略、previous_response_id 报 400）
 GET  /v1/models               聚合各渠道模型列表（缓存 60s）
 GET  /healthz
 ```
@@ -141,7 +144,8 @@ go test ./...
 - [x] M2 用量统计：Token 计量（双协议、流式）、成本核算（模型价格表）、仪表盘完善、日志过滤分页
 - [x] M2.5 管理台与安全加固：内嵌 Web 管理台、密钥打码与模型白名单、渠道模型启停、登录限速、
       错误脱敏、8080 收敛 127.0.0.1
-- [ ] M3 协议补齐：`/v1/responses`（Responses API）、`/v1/messages/count_tokens`、prompt caching 计费
+- [x] M3 协议补齐：`/v1/responses`（Responses API，chat 渠道桥接 + SSE + 工具调用）、
+      `/v1/messages/count_tokens`、prompt caching 计费（读 1/10 价、写 1.25 倍价）
 - [ ] M4 渠道与密钥治理：渠道多 key 池与冷却/健康巡检、模型映射别名、密钥预算与 RPM/TPM 限速、fallback 细化
 - [ ] M5 可观测与运维：TTFT/延迟分位、按密钥/应用用量分摊、SQLite 运维、配置导入导出
 - [ ] M6+ 按需：`/mcp` 透传、rerank、精确响应缓存、Agent 一键接入配置生成

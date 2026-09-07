@@ -14,6 +14,7 @@ type RequestLog struct {
 	TtfbMs           int64   `json:"ttfb_ms"`
 	PromptTokens     int64   `json:"prompt_tokens"`
 	CompletionTokens int64   `json:"completion_tokens"`
+	CacheTokens      int64   `json:"cache_tokens"`
 	CostUSD          float64 `json:"cost_usd"`
 	Error            string  `json:"error"`
 }
@@ -21,10 +22,10 @@ type RequestLog struct {
 func (s *Store) InsertRequestLog(l *RequestLog) error {
 	res, err := s.DB.Exec(
 		`INSERT INTO request_logs(api_key_id, channel_id, model, protocol, status,
-		     latency_ms, ttfb_ms, prompt_tokens, completion_tokens, cost, error)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		     latency_ms, ttfb_ms, prompt_tokens, completion_tokens, cache_tokens, cost, error)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		l.APIKeyID, l.ChannelID, l.Model, l.Protocol, l.Status,
-		l.LatencyMs, l.TtfbMs, l.PromptTokens, l.CompletionTokens, l.CostUSD, l.Error,
+		l.LatencyMs, l.TtfbMs, l.PromptTokens, l.CompletionTokens, l.CacheTokens, l.CostUSD, l.Error,
 	)
 	if err != nil {
 		return err
@@ -63,7 +64,7 @@ func (s *Store) ListLogs(f LogFilter) (*LogPage, error) {
 	}
 	rows, err := s.DB.Query(
 		`SELECT id, ts, api_key_id, channel_id, model, protocol, status,
-		        latency_ms, ttfb_ms, prompt_tokens, completion_tokens, cost, error
+		        latency_ms, ttfb_ms, prompt_tokens, completion_tokens, cache_tokens, cost, error
 		 FROM request_logs` + where + ` ORDER BY id DESC LIMIT ? OFFSET ?`,
 		append(args, f.Limit, f.Offset)...)
 	if err != nil {
@@ -74,7 +75,7 @@ func (s *Store) ListLogs(f LogFilter) (*LogPage, error) {
 		var l RequestLog
 		if err := rows.Scan(&l.ID, &l.Ts, &l.APIKeyID, &l.ChannelID, &l.Model,
 			&l.Protocol, &l.Status, &l.LatencyMs, &l.TtfbMs,
-			&l.PromptTokens, &l.CompletionTokens, &l.CostUSD, &l.Error); err != nil {
+			&l.PromptTokens, &l.CompletionTokens, &l.CacheTokens, &l.CostUSD, &l.Error); err != nil {
 			return nil, err
 		}
 		page.Items = append(page.Items, l)

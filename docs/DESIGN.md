@@ -1,6 +1,6 @@
 # LiteGate —— 轻量级 AI 网关 研究报告与设计方案
 
-> 调研日期：2026-09-04 ｜ 状态：M1/M2/M2.5 已交付；M3+ 路线图按 2026-09-07 同类项目调研重排
+> 调研日期：2026-09-04 ｜ 状态：M1/M2/M2.5/M3 已交付；下一步 M4 渠道与密钥治理
 > 一句话定位：**把 LiteLLM 的网关能力和 cc-switch 的"供应商切换"体验，装进一个 ~20MB 的单二进制 + 内嵌 Web UI 里。**
 
 ---
@@ -232,15 +232,23 @@ GET  /healthz
   查询串与 `Anthropic-Beta` 等头透传、价格缓存即时失效；新增 6 个回归测试
 - [x] 部署配置：systemd unit、nginx 29xxx HTTPS 反代（SSE 不缓冲）、密钥文件 gitignore
 
-### M3 —— 协议补齐（2026 年网关标配，最高优先级）
+### M3 —— 协议补齐（✅ 已完成 2026-09-08）
 > 2026-09 调研结论：OpenAI 已将 Chat Completions 归入 Legacy、新能力只给 Responses API，Codex CLI
 > 仅支持 `wire_api = responses`；prompt caching 已是各家标配，网关不透传 cache token 计费会让
 > 客户端成本可见性失真。gpt-load / new-api / LiteLLM / OpenRouter 均已上线 /v1/responses。
-- [ ] `POST /v1/responses`：OpenAI Responses API，无状态 + SSE + usage 记账；
-      进阶：chat ↔ responses 双向桥接，让仅支持 chat 的渠道也能服务 Codex
-- [ ] `POST /v1/messages/count_tokens`：Anthropic 渠道转发上游精确值，其余本地近似
-- [ ] Prompt caching 计费：透传 `cache_creation_input_tokens` / `cache_read_input_tokens` /
-      `cached_tokens`，读缓存按 1/10 价折算成本
+- [x] `POST /v1/responses`：请求转 chat 走既有渠道路由（加权/优先级/故障转移/密钥白名单全复用），
+      响应与 SSE 转回 Responses 格式（reasoning/message/function_call 三类 output item、
+      `response.created→…→response.completed` 事件序列、usage 记账）；无状态
+      （store 忽略，previous_response_id 报 400，GET/DELETE 对象报 501）；流式自动注入
+      include_usage，上游 400 时同渠道去字段重试；chat↔responses 桥接即本实现本体，
+      纯透传模式无必要（部署内渠道全部为 chat 兼容中转）
+- [x] `POST /v1/messages/count_tokens`：anthropic 渠道可服务该模型时转发上游精确值，
+      否则本地启发式估算（ASCII≈4 字符/token、CJK≈1 token/字符、每消息 +4），不记请求日志
+- [x] Prompt caching 计费：提取 OpenAI `prompt_tokens_details.cached_tokens` 与 Anthropic
+      `cache_read/cache_creation_input_tokens`（归一化为总输入口径），缓存读按输入价 1/10、
+      缓存写按 1.25 倍折算成本；日志新增 `cache_tokens` 列（旧库自动迁移）
+- [x] 回归测试 +8：请求转换、端到端非流式（含缓存折算断言）、流式桥接事件序列、
+      previous_response_id 拒绝、count_tokens 本地/转发、CostOf 缓存价
 
 ### M4 —— 渠道与密钥治理（自托管赛道标配）
 - [ ] 渠道多 key 池：单渠道多把上游 key 加权轮询；key 级启停、错误率统计 → 自动禁用 →

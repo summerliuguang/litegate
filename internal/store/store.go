@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
 	latency_ms        INTEGER NOT NULL DEFAULT 0,
 	prompt_tokens     INTEGER NOT NULL DEFAULT 0,
 	completion_tokens INTEGER NOT NULL DEFAULT 0,
+	cache_tokens      INTEGER NOT NULL DEFAULT 0,
 	cost              REAL NOT NULL DEFAULT 0,
 	ttfb_ms           INTEGER NOT NULL DEFAULT 0,
 	error             TEXT NOT NULL DEFAULT ''
@@ -131,6 +132,7 @@ func migrate(db *sql.DB) error {
 	}
 	for _, m := range []struct{ table, col, ddl string }{
 		{"request_logs", "cost", `ALTER TABLE request_logs ADD COLUMN cost REAL NOT NULL DEFAULT 0`},
+		{"request_logs", "cache_tokens", `ALTER TABLE request_logs ADD COLUMN cache_tokens INTEGER NOT NULL DEFAULT 0`},
 		{"request_logs", "ttfb_ms", `ALTER TABLE request_logs ADD COLUMN ttfb_ms INTEGER NOT NULL DEFAULT 0`},
 		{"channels", "disabled_models", `ALTER TABLE channels ADD COLUMN disabled_models TEXT NOT NULL DEFAULT '[]'`},
 		{"api_keys", "allowed_models", `ALTER TABLE api_keys ADD COLUMN allowed_models TEXT NOT NULL DEFAULT '[]'`},

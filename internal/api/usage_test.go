@@ -116,17 +116,27 @@ func TestMatchPrice(t *testing.T) {
 }
 
 func TestCostOf(t *testing.T) {
-	if store.CostOf(nil, 1000, 1000) != 0 {
+	if store.CostOf(nil, 1000, 0, 0, 1000) != 0 {
 		t.Fatal("nil price should cost 0")
 	}
 	p := &store.ModelPrice{InputPrice: 2, OutputPrice: 4}
-	if got := store.CostOf(p, 1_000_000, 500_000); got != 4 {
+	if got := store.CostOf(p, 1_000_000, 0, 0, 500_000); got != 4 {
 		t.Fatalf("cost = %v, want 4", got)
 	}
 	// 3 个 prompt token × 0.5 美元/百万 = 0.0000015，四舍五入到 6 位小数
 	p2 := &store.ModelPrice{InputPrice: 0.5}
-	if got := store.CostOf(p2, 3, 0); math.Abs(got-0.000002) > 1e-9 {
+	if got := store.CostOf(p2, 3, 0, 0, 0); math.Abs(got-0.000002) > 1e-9 {
 		t.Fatalf("cost rounding = %v", got)
+	}
+	// 缓存读按 1/10 价：100 万输入（其中 60 万命中缓存）× 2 美元
+	// = 40 万×2/1e6 + 60 万×0.2/1e6 = 0.8 + 0.12 = 0.92
+	if got := store.CostOf(p, 1_000_000, 600_000, 0, 0); math.Abs(got-0.92) > 1e-9 {
+		t.Fatalf("cached cost = %v, want 0.92", got)
+	}
+	// 缓存写按 1.25 倍价：100 万总输入（其中 20 万缓存写）× 2 美元
+	// = 80 万×2/1e6 + 20 万×2.5/1e6 = 1.6 + 0.5 = 2.1
+	if got := store.CostOf(p, 1_000_000, 0, 200_000, 0); math.Abs(got-2.1) > 1e-9 {
+		t.Fatalf("cache-write cost = %v, want 2.1", got)
 	}
 }
 

@@ -8,33 +8,55 @@ import (
 	"litegate/internal/store"
 )
 
-// tokenUsage 是一次请求的 token 消耗；为零值表示上游未报告 usage。
+// tokenUsage 是一次请求的 token 消耗；prompt 为总输入（含缓存命中/写入）。
+// cacheRead/cacheWrite 用于按缓存价折算成本（读 1/10 价、写 1.25 倍价）。
 type tokenUsage struct {
 	prompt     int64
 	completion int64
+	cacheRead  int64
+	cacheWrite int64
 }
 
-// usageFields 兼容 openai（prompt_tokens/completion_tokens）
-// 与 anthropic（input_tokens/output_tokens）两套字段名。
+// usageFields 兼容 openai（prompt_tokens/completion_tokens/prompt_tokens_details）
+// 与 anthropic（input_tokens/output_tokens/cache_*_input_tokens）两套字段名。
 type usageFields struct {
 	PromptTokens     *int64 `json:"prompt_tokens"`
 	CompletionTokens *int64 `json:"completion_tokens"`
 	InputTokens      *int64 `json:"input_tokens"`
 	OutputTokens     *int64 `json:"output_tokens"`
+	PromptTokensDetails *struct {
+		CachedTokens int64 `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+	CacheReadTokens    *int64 `json:"cache_read_input_tokens"`
+	CacheCreateTokens  *int64 `json:"cache_creation_input_tokens"`
 }
 
-func (u *usageFields) values() (prompt, completion int64) {
-	if u.PromptTokens != nil {
-		prompt = *u.PromptTokens
-	} else if u.InputTokens != nil {
-		prompt = *u.InputTokens
+// values 归一化两种口径：openai 的 prompt_tokens 本身就是总输入；anthropic 的
+// input_tokens 不含缓存部分，这里加总成总输入，让成本公式只有一套。
+func (u *usageFields) values() (t tokenUsage) {
+	t.prompt = valueOr(u.PromptTokens, u.InputTokens)
+	t.completion = valueOr(u.CompletionTokens, u.OutputTokens)
+	if u.PromptTokensDetails != nil {
+		t.cacheRead = u.PromptTokensDetails.CachedTokens
 	}
-	if u.CompletionTokens != nil {
-		completion = *u.CompletionTokens
-	} else if u.OutputTokens != nil {
-		completion = *u.OutputTokens
+	if t.cacheRead == 0 {
+		t.cacheRead = valueOr(u.CacheReadTokens, nil)
 	}
-	return prompt, completion
+	t.cacheWrite = valueOr(u.CacheCreateTokens, nil)
+	if u.PromptTokens == nil && u.InputTokens != nil {
+		t.prompt += t.cacheRead + t.cacheWrite
+	}
+	return t
+}
+
+func valueOr(a, b *int64) int64 {
+	if a != nil {
+		return *a
+	}
+	if b != nil {
+		return *b
+	}
+	return 0
 }
 
 // usageFromJSON 从一段 JSON（完整响应体或单条 SSE data 行）里提取 usage。
@@ -53,9 +75,9 @@ func usageFromJSON(b []byte) (tokenUsage, bool) {
 	var u tokenUsage
 	switch {
 	case v.Usage != nil:
-		u.prompt, u.completion = v.Usage.values()
+		u = v.Usage.values()
 	case v.Message != nil && v.Message.Usage != nil:
-		u.prompt, u.completion = v.Message.Usage.values()
+		u = v.Message.Usage.values()
 	default:
 		return tokenUsage{}, false
 	}
@@ -106,6 +128,8 @@ func (s *sseUsageScanner) scanLine(line []byte) {
 	if u, ok := usageFromJSON(b); ok {
 		if u.prompt > 0 {
 			s.usage.prompt = u.prompt
+			s.usage.cacheRead = u.cacheRead
+			s.usage.cacheWrite = u.cacheWrite
 		}
 		if u.completion > s.usage.completion {
 			s.usage.completion = u.completion

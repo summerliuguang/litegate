@@ -61,11 +61,20 @@ func (s *Store) DeleteModelPrice(model string) error {
 }
 
 // CostOf 按「美元 / 百万 token」计算单笔请求成本；无价格信息时成本记 0。
+// promptTokens 为总输入 token（含缓存命中与写入）；缓存读按输入价 1/10、
+// 缓存写按输入价 1.25 倍计（OpenAI / Anthropic 官方口径一致）。
 // 结果四舍五入到小数点后 6 位，避免浮点尾巴进日志和聚合。
-func CostOf(p *ModelPrice, promptTokens, completionTokens int64) float64 {
+func CostOf(p *ModelPrice, promptTokens, cacheRead, cacheWrite, completionTokens int64) float64 {
 	if p == nil {
 		return 0
 	}
-	cost := float64(promptTokens)/1e6*p.InputPrice + float64(completionTokens)/1e6*p.OutputPrice
+	uncached := promptTokens - cacheRead - cacheWrite
+	if uncached < 0 {
+		uncached = 0
+	}
+	cost := float64(uncached)/1e6*p.InputPrice +
+		float64(cacheRead)/1e6*p.InputPrice*0.1 +
+		float64(cacheWrite)/1e6*p.InputPrice*1.25 +
+		float64(completionTokens)/1e6*p.OutputPrice
 	return math.Round(cost*1e6) / 1e6
 }

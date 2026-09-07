@@ -55,6 +55,11 @@ func (p *proxy) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/chat/completions", p.serveOpenAI)
 	mux.HandleFunc("POST /v1/embeddings", p.serveOpenAI)
 	mux.HandleFunc("POST /v1/messages", p.serveAnthropic)
+	mux.HandleFunc("POST /v1/messages/count_tokens", p.serveCountTokens)
+	mux.HandleFunc("POST /v1/responses", p.serveResponses)
+	// 网关无状态，不存 Responses 对象：取回/删除走明确报错而不是落到管理页
+	mux.HandleFunc("GET /v1/responses/{id}", p.serveResponsesStored)
+	mux.HandleFunc("DELETE /v1/responses/{id}", p.serveResponsesStored)
 	mux.HandleFunc("GET /v1/models", p.serveModels)
 }
 
@@ -392,8 +397,8 @@ func (p *proxy) logRequest(ak *store.APIKey, c *store.Channel, protocol, model s
 	l := &store.RequestLog{
 		Model: model, Protocol: protocol, Status: status,
 		LatencyMs: total.Milliseconds(), TtfbMs: ttfb.Milliseconds(),
-		PromptTokens: u.prompt, CompletionTokens: u.completion,
-		CostUSD: store.CostOf(price, u.prompt, u.completion),
+		PromptTokens: u.prompt, CompletionTokens: u.completion, CacheTokens: u.cacheRead,
+		CostUSD: store.CostOf(price, u.prompt, u.cacheRead, u.cacheWrite, u.completion),
 		Error:   errMsg,
 	}
 	if ak != nil {
