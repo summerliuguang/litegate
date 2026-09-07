@@ -1,6 +1,6 @@
 # LiteGate —— 轻量级 AI 网关 研究报告与设计方案
 
-> 调研日期：2026-09-04 ｜ 状态：设计稿 v0.1（待评审）
+> 调研日期：2026-09-04 ｜ 状态：M1/M2/M2.5 已交付；M3+ 路线图按 2026-09-07 同类项目调研重排
 > 一句话定位：**把 LiteLLM 的网关能力和 cc-switch 的"供应商切换"体验，装进一个 ~20MB 的单二进制 + 内嵌 Web UI 里。**
 
 ---
@@ -220,18 +220,53 @@ GET  /healthz
   （`gpt-4o` 覆盖 `gpt-4o-2024-08-06`）；价格缓存 60s
 - [x] 仪表盘完善：今日请求/错误/token/费用、近 7 天逐日趋势、按模型/按渠道 Top10
 - [x] 日志过滤分页：channel_id/api_key_id/model/status/since/until + offset，返回 total
-- [ ] 密钥额度/过期/模型白名单（顺延至 M3）
+- [x] 虚拟密钥模型白名单（`allowed_models`，按 key 限定可用模型，`/v1/models` 取交集）
 
-### M3 —— 容灾与 Agent 接入（差异化）
-- [ ] 自动重试、故障转移、冷却与半开恢复、健康巡检
-- [ ] 会话亲和（可选）
-- [ ] 密钥额度/过期/模型白名单（自 M2 顺延）
-- [ ] Claude Code / Codex / Gemini CLI 一键接入配置生成
+### M2.5 —— Web 管理台与安全加固（✅ 已完成 2026-09-07）
+- [x] 内嵌管理台六页：仪表盘、渠道管理、虚拟密钥、请求日志、模型价格、登录（go:embed，零前端构建）
+- [x] 渠道模型启停：`models` + `disabled_models` 双列表，通配渠道可只禁部分模型；界面勾选管理
+- [x] 虚拟密钥管控：列表打码、`/reveal` 按需查看明文、`allowed_models` 白名单、key 级启停
+- [x] 安全加固：登录失败限速（5 次锁 60s）、下游错误信息脱敏（渠道名/上游地址只进服务端日志）、
+  弱管理密码拒绝启动（空/"admin"）、数据面 8080 收敛 127.0.0.1（局域网统一走 nginx 29xxx HTTPS）
+- [x] P0/P1 缺陷修复：停用渠道不再接流量、通配渠道 EnableModel 不被打穿、流式 usage 大整数精度、
+  查询串与 `Anthropic-Beta` 等头透传、价格缓存即时失效；新增 6 个回归测试
+- [x] 部署配置：systemd unit、nginx 29xxx HTTPS 反代（SSE 不缓冲）、密钥文件 gitignore
 
-### M4 —— 打磨与发布
-- [ ] 订阅账号类渠道（Claude/Codex OAuth 凭证托管，对标 gpt-load/cc-switch）
-- [ ] Gemini 协议出站适配完善、 embeddings、多模态消息透传验证
-- [ ] i18n（中/英）、深色模式、跨平台二进制发布流水线（linux/amd64、linux/arm64、macOS、Windows）、压测报告（目标：单实例 ≥ 500 并发流式连接，网关附加延迟 P99 < 10ms）
+### M3 —— 协议补齐（2026 年网关标配，最高优先级）
+> 2026-09 调研结论：OpenAI 已将 Chat Completions 归入 Legacy、新能力只给 Responses API，Codex CLI
+> 仅支持 `wire_api = responses`；prompt caching 已是各家标配，网关不透传 cache token 计费会让
+> 客户端成本可见性失真。gpt-load / new-api / LiteLLM / OpenRouter 均已上线 /v1/responses。
+- [ ] `POST /v1/responses`：OpenAI Responses API，无状态 + SSE + usage 记账；
+      进阶：chat ↔ responses 双向桥接，让仅支持 chat 的渠道也能服务 Codex
+- [ ] `POST /v1/messages/count_tokens`：Anthropic 渠道转发上游精确值，其余本地近似
+- [ ] Prompt caching 计费：透传 `cache_creation_input_tokens` / `cache_read_input_tokens` /
+      `cached_tokens`，读缓存按 1/10 价折算成本
+
+### M4 —— 渠道与密钥治理（自托管赛道标配）
+- [ ] 渠道多 key 池：单渠道多把上游 key 加权轮询；key 级启停、错误率统计 → 自动禁用 →
+      冷却 → 定时健康巡检 → 半开恢复（吸收原 M3 容灾项）
+- [ ] 模型映射/别名：对外稳定模型名 → 渠道真实模型名（客户端无感知切换便宜/本地模型）
+- [ ] 虚拟密钥增强：$/token 日/月预算（超限 429）、RPM/TPM 限速（单进程内存滑动窗口）、过期时间
+- [ ] Fallback 细化：`on_status_codes` 按状态码决定是否跨渠道、指数退避、流式首字节前才允许切换
+- [ ] 会话亲和（可选）：同会话 sticky 到同渠道/key
+
+### M5 —— 可观测与运维
+- [ ] 日志与看板：TTFT / tokens/s 入日志，P50/P95 延迟、RPM/TPM 实时指标
+- [ ] 用量分摊：按虚拟密钥分摊成本、应用归因（`X-LiteGate-App` 请求头按应用聚合）
+- [ ] SQLite 运维包：在线备份（VACUUM INTO）、日志保留策略、深度 healthz、版本信息注入
+- [ ] 配置导入导出：渠道 + 价格 JSON（密钥可选脱敏）、渠道模型列表自动发现
+- [ ] 可选：Prometheus `/metrics`
+
+### M6+ —— 观察后按需
+- [ ] `/mcp` 最小透传聚合（streamable HTTP 转发 + 按 key 工具白名单）
+- [ ] rerank 透传、精确匹配响应缓存（请求 hash + TTL + 命中统计）
+- [ ] Claude Code / Codex / Gemini CLI 一键接入配置生成（自原 M3 顺延）
+- [ ] 多模态消息透传验证、跨平台二进制发布流水线与压测报告
+- [ ] 订阅账号渠道**不自研**：需要时旁路部署 CLIProxyAPI，在 LiteGate 注册为 OpenAI 兼容渠道
+
+### 明确不做（2026-09 调研后重申）
+语义缓存、Wasm/插件运行时、K8s/分布式状态、用户系统/充值/兑换码、全链路 trace（需要时外接
+Langfuse）、AI 智能路由、Vue3 重写、i18n、Gemini 原生出站适配。
 
 ---
 
@@ -240,7 +275,7 @@ GET  /healthz
 | 风险 | 对策 |
 |---|---|
 | 协议细节繁杂（tool use / thinking / 多模态在三种协议间不对等） | v1 先做"同协议透传 + 模型名映射"，跨协议转换仅覆盖核心字段；每种协议配契约测试集（用真实客户端录制回放） |
-| 订阅账号（OAuth）渠道合规与实现复杂度高 | 放 M4，先以 API Key 类渠道覆盖 90% 场景 |
+| 订阅账号（OAuth）渠道合规与实现复杂度高 | 不自研；需要时旁路部署 CLIProxyAPI 并注册为 OpenAI 兼容渠道，先以 API Key 类渠道覆盖 90% 场景 |
 | SQLite 高并发写日志成为瓶颈 | WAL + 批量异步落库（内存 ring buffer 定期 flush），日志表按月分表/滚动清理 |
 | 与 gpt-load 等成熟项目同质化 | 坚守差异：更轻（无企业调度）、CLI 一键接入、三协议原生；不做大而全 |
 
@@ -249,5 +284,7 @@ GET  /healthz
 ## 7. 参考资料
 
 - 各项目 README 与 GitHub API 元数据（2026-09-04 抓取）
+- 2026-09-07 同类项目二次调研：gpt-load、new-api、one-api/one-hub/done-hub、CLIProxyAPI、axonhub、
+  LiteLLM、OpenRouter、Portkey/Kong/Envoy AI Gateway/Higress/Cloudflare AI Gateway（结论见 M3-M6）
 - 协议规范：OpenAI Chat Completions API、Anthropic Messages API、Google Gemini API
 - 相关实现可参考：`one-api`（渠道调度模型）、`gpt-load`（凭证加密与订阅账号调度）、`cc-switch`（CLI 配置模板）

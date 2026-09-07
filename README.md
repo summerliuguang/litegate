@@ -10,7 +10,7 @@
 - 用量统计：请求级 Token 计量、成本核算（模型价格可配）、日志过滤分页、用量看板（今日/近 7 天/按渠道/按模型）
 - 内嵌管理页面与管理 API：渠道 CRUD、连通性测试、虚拟密钥、请求日志、用量看板
 
-> 设计文档见 [docs/DESIGN.md](docs/DESIGN.md)。项目处于 M2 阶段：数据面与用量统计可用，Web 管理界面与 Gemini 适配在后续里程碑。
+> 设计文档见 [docs/DESIGN.md](docs/DESIGN.md)。M1 数据面、M2 用量统计、M2.5 内嵌管理台与安全加固已交付；下一步 M3 协议补齐（Responses API / count_tokens / prompt caching 计费）。
 
 ## 构建
 
@@ -139,7 +139,13 @@ go test ./...
 
 - [x] M1 数据面：OpenAI/Anthropic 双协议、多渠道加权路由、故障转移、SSE 流式、虚拟密钥、日志
 - [x] M2 用量统计：Token 计量（双协议、流式）、成本核算（模型价格表）、仪表盘完善、日志过滤分页
-- [ ] M3 Agent 接入：Claude Code / Codex / Gemini CLI 一键配置生成；健康巡检与自动冷却
-- [ ] M4 扩展：Gemini 上游适配、订阅账号（OAuth）渠道、完整 Vue3 管理界面、i18n
+- [x] M2.5 管理台与安全加固：内嵌 Web 管理台、密钥打码与模型白名单、渠道模型启停、登录限速、
+      错误脱敏、8080 收敛 127.0.0.1
+- [ ] M3 协议补齐：`/v1/responses`（Responses API）、`/v1/messages/count_tokens`、prompt caching 计费
+- [ ] M4 渠道与密钥治理：渠道多 key 池与冷却/健康巡检、模型映射别名、密钥预算与 RPM/TPM 限速、fallback 细化
+- [ ] M5 可观测与运维：TTFT/延迟分位、按密钥/应用用量分摊、SQLite 运维、配置导入导出
+- [ ] M6+ 按需：`/mcp` 透传、rerank、精确响应缓存、Agent 一键接入配置生成
+
+明确不做：语义缓存、插件运行时、K8s/分布式、用户系统/充值、全链路 trace、AI 智能路由、Vue3、i18n、Gemini 原生出站适配（依据与细则见 docs/DESIGN.md）。
 
 详见 [docs/DESIGN.md](docs/DESIGN.md)。
