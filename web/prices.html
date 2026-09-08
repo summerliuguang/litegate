@@ -12,7 +12,8 @@
 <div class="wrap">
   <h1 class="title is-4" style="margin:0 0 .3rem">模型价格</h1>
   <p class="is-size-7 has-text-grey" style="margin-bottom:1rem">
-    单位：美元 / 百万 token，与 OpenAI 定价页口径一致。未配置价格的模型不计成本（记 0）。
+    单位：/ 百万 token，币种跟随各模型官方定价页（<b>$</b> 美元 / <b>¥</b> 人民币），不做汇率换算；
+    成本按各行币种数值直接累计。未配置价格的模型不计成本（记 0）。
     价格匹配先精确、再最长前缀：<code>gpt-4o</code> 覆盖 <code>gpt-4o-2024-08-06</code>。
   </p>
 
@@ -23,9 +24,18 @@
           <label class="label is-size-7">模型名（支持 <code>模型名前缀</code> 写法匹配一族）</label>
           <input class="input is-small mono" id="fModel" placeholder="gpt-4o" required>
         </div>
-        <div class="column"><label class="label is-size-7">输入价 $/M</label>
+        <div class="column is-narrow">
+          <label class="label is-size-7">币种</label>
+          <div class="select is-small">
+            <select id="fCurrency">
+              <option value="USD" selected>$ 美元</option>
+              <option value="CNY">¥ 人民币</option>
+            </select>
+          </div>
+        </div>
+        <div class="column"><label class="label is-size-7">输入价 /M</label>
           <input class="input is-small" id="fIn" type="number" min="0" step="any" placeholder="2.5" required></div>
-        <div class="column"><label class="label is-size-7">输出价 $/M</label>
+        <div class="column"><label class="label is-size-7">输出价 /M</label>
           <input class="input is-small" id="fOut" type="number" min="0" step="any" placeholder="10" required></div>
         <div class="column is-narrow" style="display:flex;align-items:flex-end">
           <button class="button is-link is-small" type="submit">保存（新建或覆盖）</button>
@@ -36,7 +46,7 @@
 
   <div class="table-container card">
     <table class="table is-fullwidth is-size-7 mobile-cards" style="border-radius:12px">
-      <thead><tr><th>模型</th><th>输入价 $/M</th><th>输出价 $/M</th><th>更新时间</th><th style="min-width:90px">操作</th></tr></thead>
+      <thead><tr><th>模型</th><th>输入价 /M</th><th>输出价 /M</th><th>更新时间</th><th style="min-width:90px">操作</th></tr></thead>
       <tbody id="rows"><tr><td colspan="5" class="has-text-grey">加载中…</td></tr></tbody>
     </table>
   </div>
@@ -49,6 +59,9 @@ renderNav();
 // 模型名可能含 "/"，DELETE 走通配路由 /prices/{model...}
 function delUrl(model) { return '/api/admin/prices/' + model.split('/').map(encodeURIComponent).join('/'); }
 
+const CUR_SYMBOL = { USD: '$', CNY: '¥' };
+function curSym(c) { return CUR_SYMBOL[(c || 'USD').toUpperCase()] || (c || 'USD'); }
+
 async function load() {
   try {
     const prices = await api('/api/admin/prices');
@@ -57,13 +70,16 @@ async function load() {
       tb.innerHTML = '<tr><td colspan="5" class="has-text-grey">还没有价格配置，用上方表单添加</td></tr>';
       return;
     }
-    tb.innerHTML = prices.map(p => `<tr>
-      <td data-label="模型" class="mono"><b>${esc(p.model)}</b></td>
-      <td data-label="输入价 $/M">${p.input_price}</td>
-      <td data-label="输出价 $/M">${p.output_price}</td>
+    tb.innerHTML = prices.map(p => {
+      const s = curSym(p.currency);
+      return `<tr>
+      <td data-label="模型" class="mono cell-col"><b>${esc(p.model)}</b></td>
+      <td data-label="输入价 /M">${s}${p.input_price}</td>
+      <td data-label="输出价 /M">${s}${p.output_price}</td>
       <td data-label="更新时间" class="mono">${fmtTs(p.updated_at)}</td>
       <td data-label="操作"><button class="button is-small is-danger is-light" onclick="delPrice('${esc(p.model)}')">删除</button></td>
-    </tr>`).join('');
+    </tr>`;
+    }).join('');
   } catch (ex) { toast('加载失败：' + ex.message, false); }
 }
 
@@ -71,6 +87,7 @@ document.getElementById('formUp').addEventListener('submit', async e => {
   e.preventDefault();
   const body = {
     model: document.getElementById('fModel').value.trim(),
+    currency: document.getElementById('fCurrency').value,
     input_price: parseFloat(document.getElementById('fIn').value),
     output_price: parseFloat(document.getElementById('fOut').value),
   };

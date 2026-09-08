@@ -597,11 +597,15 @@ func (a *admin) listLogs(w http.ResponseWriter, r *http.Request) {
 
 // ---- 模型价格管理 ----
 
+// priceIn 的 currency 为可选标注字段（"USD"|"CNY"），缺省 USD；不做汇率换算。
 type priceIn struct {
 	Model       string  `json:"model"`
 	InputPrice  float64 `json:"input_price"`
 	OutputPrice float64 `json:"output_price"`
+	Currency    string  `json:"currency"`
 }
+
+var priceCurrencies = map[string]bool{"USD": true, "CNY": true}
 
 func (a *admin) listPrices(w http.ResponseWriter, _ *http.Request) {
 	prices, err := a.st.ListModelPrices()
@@ -618,12 +622,16 @@ func (a *admin) upsertPrice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Model = strings.TrimSpace(in.Model)
-	if in.Model == "" || in.InputPrice < 0 || in.OutputPrice < 0 {
+	in.Currency = strings.ToUpper(strings.TrimSpace(in.Currency))
+	if in.Currency == "" {
+		in.Currency = "USD"
+	}
+	if in.Model == "" || in.InputPrice < 0 || in.OutputPrice < 0 || !priceCurrencies[in.Currency] {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "model is required and prices must be non-negative"})
+			"error": "model is required, prices must be non-negative and currency must be USD or CNY"})
 		return
 	}
-	p := &store.ModelPrice{Model: in.Model, InputPrice: in.InputPrice, OutputPrice: in.OutputPrice}
+	p := &store.ModelPrice{Model: in.Model, InputPrice: in.InputPrice, OutputPrice: in.OutputPrice, Currency: in.Currency}
 	if err := a.st.UpsertModelPrice(p); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

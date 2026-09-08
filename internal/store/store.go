@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS model_prices (
 	model        TEXT PRIMARY KEY,
 	input_price  REAL NOT NULL DEFAULT 0,
 	output_price REAL NOT NULL DEFAULT 0,
+	currency     TEXT NOT NULL DEFAULT 'USD',
 	updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 `
@@ -121,7 +122,7 @@ func (s *Store) Close() error { return s.DB.Close() }
 // migrate 为旧库补齐后加的列（SQLite 不支持 ADD COLUMN IF NOT EXISTS）。
 func migrate(db *sql.DB) error {
 	have := map[string]bool{}
-	for _, table := range []string{"request_logs", "channels", "api_keys"} {
+	for _, table := range []string{"request_logs", "channels", "api_keys", "model_prices"} {
 		rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
 		if err != nil {
 			return err
@@ -155,6 +156,7 @@ func migrate(db *sql.DB) error {
 		{"api_keys", "budget_usd", `ALTER TABLE api_keys ADD COLUMN budget_usd REAL NOT NULL DEFAULT 0`},
 		{"api_keys", "budget_period", `ALTER TABLE api_keys ADD COLUMN budget_period TEXT NOT NULL DEFAULT 'daily'`},
 		{"api_keys", "budget_tokens", `ALTER TABLE api_keys ADD COLUMN budget_tokens INTEGER NOT NULL DEFAULT 0`},
+		{"model_prices", "currency", `ALTER TABLE model_prices ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD'`},
 	} {
 		if !have[m.table+"."+m.col] {
 			if _, err := db.Exec(m.ddl); err != nil {

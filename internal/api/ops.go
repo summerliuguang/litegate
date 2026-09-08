@@ -144,7 +144,7 @@ func (a *admin) importConfig(w http.ResponseWriter, r *http.Request) {
 	prices := 0
 	for _, p := range in.Prices {
 		if err := a.st.UpsertModelPrice(&store.ModelPrice{
-			Model: p.Model, InputPrice: p.InputPrice, OutputPrice: p.OutputPrice,
+			Model: p.Model, InputPrice: p.InputPrice, OutputPrice: p.OutputPrice, Currency: p.Currency,
 		}); err != nil {
 			errs = append(errs, fmt.Sprintf("价格 %q: %v", p.Model, err))
 			continue
