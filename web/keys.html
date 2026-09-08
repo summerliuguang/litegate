@@ -37,8 +37,25 @@
     <section class="modal-card-body">
       <div class="field"><label class="label is-size-7">名称</label>
         <input class="input is-small" id="eName"></div>
-      <div class="field"><label class="label is-size-7">允许的模型（每行一个，留空 = 不限制；只能调用各渠道当前启用的模型）</label>
-        <textarea class="textarea is-small mono" id="eModels" rows="6" placeholder="deepseek-v4-flash&#10;mimo-v2.5"></textarea></div>
+      <div class="field">
+        <label class="label is-size-7">允许的模型（下拉勾选，多选；留空 = 不限制，可用全部启用模型）</label>
+        <button class="button is-small is-fullwidth" type="button" id="ddToggle" style="justify-content:space-between">
+          <span id="ddLabel">全部模型（不限制）</span>
+          <span class="has-text-grey">▾</span>
+        </button>
+        <div id="ddPanel" style="display:none;border:1px solid var(--line,#e8eaf0);border-radius:8px;margin-top:.4rem;background:#fff">
+          <div style="padding:.45rem .6rem;border-bottom:1px solid var(--line,#e8eaf0);position:sticky;top:0;background:#fff">
+            <input class="input is-small mono" id="ddFilter" placeholder="搜索模型…">
+            <div class="is-flex" style="gap:.4rem;margin-top:.35rem;align-items:center">
+              <button class="button is-small" type="button" id="ddAll">勾选可见</button>
+              <button class="button is-small" type="button" id="ddNone">清空</button>
+              <span class="is-size-7 has-text-grey" id="ddCount"></span>
+            </div>
+          </div>
+          <div id="ddList" style="max-height:260px;overflow-y:auto;padding:.3rem .6rem .5rem"></div>
+        </div>
+        <p class="help is-size-7 has-text-grey">只列出各渠道当前启用的模型；渠道新增模型后需回到这里重新勾选</p>
+      </div>
       <div class="columns" style="margin-bottom:0">
         <div class="column"><div class="field"><label class="label is-size-7">RPM 限速（次/分钟，0 = 不限）</label>
           <input class="input is-small" id="eRpm" type="number" min="0" value="0"></div></div>
@@ -81,8 +98,10 @@ async function load() {
       return;
     }
     tb.innerHTML = keys.map(k => {
-      const lim = k.allowed_models && k.allowed_models.length
-        ? `<span title="${esc(k.allowed_models.join('\n'))}">限 ${k.allowed_models.length} 个模型</span>`
+      const am = k.allowed_models || [];
+      const lim = am.length
+        ? am.slice(0, 3).map(m => `<span class="tag is-link is-light is-size-7" style="margin:0 .2rem .2rem 0">${esc(m)}</span>`).join('')
+          + (am.length > 3 ? `<span class="tag is-light is-size-7" title="${esc(am.join('\n'))}">+${am.length - 3}</span>` : '')
         : '<span class="has-text-grey">全部模型</span>';
       const limits = [];
       if (k.rpm_limit) limits.push(k.rpm_limit + ' RPM');
@@ -156,13 +175,93 @@ window.copyKey = async function (id) {
 // ---- 编辑密钥 ----
 let keysCache = [];
 let editingKeyId = null;
+let enabledModels = [];         // 各渠道启用模型的并集（disabled 的不出现）
+let selectedModels = new Set(); // 编辑中的已勾选集合
+let dropdownBound = false;
+
+function refreshDDLabel() {
+  const n = selectedModels.size;
+  document.getElementById('ddLabel').textContent = n ? `已选 ${n} 个模型` : '全部模型（不限制）';
+}
+
+function renderDDList(filter) {
+  const kw = (filter || '').toLowerCase();
+  const rows = enabledModels.filter(m => !kw || m.toLowerCase().includes(kw));
+  // 已勾选但渠道已停用的模型：灰显保留，避免保存时静默丢失
+  const stale = [...selectedModels].filter(m => !enabledModels.includes(m));
+  let html = rows.map(m =>
+    `<label style="display:flex;gap:.5rem;align-items:center;padding:.16rem 0;cursor:pointer">
+       <input type="checkbox" class="dd-check" data-model="${esc(m)}" ${selectedModels.has(m) ? 'checked' : ''}>
+       <span class="mono" style="word-break:break-all">${esc(m)}</span>
+     </label>`).join('');
+  if (stale.length) {
+    html += `<p class="is-size-7 has-text-grey" style="margin:.4rem 0 .1rem">已勾选但渠道当前未启用（保存后保留）：</p>` +
+      stale.map(m =>
+        `<label style="display:flex;gap:.5rem;align-items:center;padding:.16rem 0;cursor:pointer;opacity:.55">
+           <input type="checkbox" class="dd-check" data-model="${esc(m)}" checked>
+           <span class="mono">${esc(m)}</span>
+         </label>`).join('');
+  }
+  document.getElementById('ddList').innerHTML = html ||
+    '<p class="has-text-grey is-size-7">没有匹配的启用模型</p>';
+  document.getElementById('ddCount').textContent =
+    `已选 ${selectedModels.size} / 共 ${enabledModels.length}` + (kw ? `（匹配 ${rows.length}）` : '');
+}
+
+function bindDropdown() {
+  if (dropdownBound) return;
+  dropdownBound = true;
+  const panel = document.getElementById('ddPanel');
+  document.getElementById('ddToggle').addEventListener('click', e => {
+    e.stopPropagation();
+    const open = panel.style.display !== 'none';
+    panel.style.display = open ? 'none' : 'block';
+    if (!open) renderDDList(document.getElementById('ddFilter').value);
+  });
+  document.addEventListener('click', e => {
+    if (panel.style.display !== 'none' && !panel.contains(e.target)) panel.style.display = 'none';
+  });
+  document.getElementById('ddFilter').addEventListener('click', e => e.stopPropagation());
+  document.getElementById('ddFilter').addEventListener('input', e => renderDDList(e.target.value));
+  document.getElementById('ddList').addEventListener('change', e => {
+    const cb = e.target.closest('.dd-check');
+    if (!cb) return;
+    if (cb.checked) selectedModels.add(cb.dataset.model);
+    else selectedModels.delete(cb.dataset.model);
+    refreshDDLabel();
+  });
+  document.getElementById('ddAll').addEventListener('click', () => {
+    const kw = document.getElementById('ddFilter').value.toLowerCase();
+    enabledModels.filter(m => !kw || m.toLowerCase().includes(kw)).forEach(m => selectedModels.add(m));
+    renderDDList(document.getElementById('ddFilter').value);
+    refreshDDLabel();
+  });
+  document.getElementById('ddNone').addEventListener('click', () => {
+    selectedModels.clear();
+    renderDDList(document.getElementById('ddFilter').value);
+    refreshDDLabel();
+  });
+}
+
+// 拉取渠道列表，计算启用模型并集（disabled 的不进下拉）
+async function loadEnabledModels() {
+  try {
+    const chans = await api('/api/admin/channels');
+    const set = new Set();
+    chans.forEach(c => (c.models || []).forEach(m => set.add(m)));
+    enabledModels = [...set].sort();
+  } catch (_) { enabledModels = []; }
+  bindDropdown();
+}
 
 window.openEditKey = function (id) {
   const k = keysCache.find(x => x.id === id);
   if (!k) return;
   editingKeyId = id;
   document.getElementById('eName').value = k.name;
-  document.getElementById('eModels').value = (k.allowed_models || []).join('\n');
+  selectedModels = new Set(k.allowed_models || []);
+  renderDDList('');
+  refreshDDLabel();
   document.getElementById('eRpm').value = k.rpm_limit || 0;
   document.getElementById('eTpm').value = k.tpm_limit || 0;
   document.getElementById('eBudget').value = k.budget_usd || 0;
@@ -179,7 +278,7 @@ document.querySelector('#editModal .modal-background').addEventListener('click',
 document.getElementById('eSave').addEventListener('click', async () => {
   const name = document.getElementById('eName').value.trim();
   if (!name) { document.getElementById('eErr').textContent = '名称不能为空'; return; }
-  const models = document.getElementById('eModels').value.split('\n').map(s => s.trim()).filter(Boolean);
+  const models = [...selectedModels];
   try {
     await api('/api/admin/keys/' + editingKeyId, {
       method: 'PUT',
@@ -199,6 +298,7 @@ document.getElementById('eSave').addEventListener('click', async () => {
 });
 
 load();
+loadEnabledModels();
 </script>
 </body>
 </html>
