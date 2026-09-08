@@ -175,6 +175,46 @@ func (s *Store) UsageSince(apiKeyID int64, since string) (cost float64, tokens i
 	return cost, tokens, err
 }
 
+// KeySpeedStat 是单个虚拟密钥的输出速度聚合。
+type KeySpeedStat struct {
+	APIKeyID         int64
+	Requests         int64
+	CompletionTokens int64
+	GenMs            int64 // 生成阶段耗时合计（latency_ms - ttfb_ms）
+}
+
+// Tps 返回加权平均输出速度（输出 token/秒）；无有效样本返回 0。
+func (st KeySpeedStat) Tps() float64 {
+	if st.GenMs <= 0 {
+		return 0
+	}
+	return float64(st.CompletionTokens) / (float64(st.GenMs) / 1000)
+}
+
+// KeySpeedStats 按密钥聚合近 7 天的输出速度：只统计成功且可计算的请求
+// （有输出 token 且 latency > ttfb）。加权平均比逐条平均更能反映真实吞吐。
+func (s *Store) KeySpeedStats() (map[int64]KeySpeedStat, error) {
+	rows, err := s.DB.Query(`
+		SELECT api_key_id, COUNT(*), SUM(completion_tokens), SUM(latency_ms - ttfb_ms)
+		FROM request_logs
+		WHERE ` + sqlLast7Days + ` AND status < 400 AND error = ''
+		  AND completion_tokens > 0 AND latency_ms > ttfb_ms
+		GROUP BY api_key_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]KeySpeedStat{}
+	for rows.Next() {
+		var st KeySpeedStat
+		if err := rows.Scan(&st.APIKeyID, &st.Requests, &st.CompletionTokens, &st.GenMs); err != nil {
+			return nil, err
+		}
+		out[st.APIKeyID] = st
+	}
+	return out, rows.Err()
+}
+
 // normalizeList 去空与去重。
 func normalizeList(in []string) []string {
 	out := make([]string, 0, len(in))

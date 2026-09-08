@@ -22,8 +22,8 @@
   </p>
   <div class="table-container card">
     <table class="table is-fullwidth is-size-7" style="border-radius:12px">
-      <thead><tr><th>ID</th><th>名称</th><th>密钥</th><th>模型限制</th><th>限额 / 预算 / 有效期</th><th>创建时间</th><th style="min-width:220px">操作</th></tr></thead>
-      <tbody id="rows"><tr><td colspan="7" class="has-text-grey">加载中…</td></tr></tbody>
+      <thead><tr><th>ID</th><th>名称</th><th>密钥</th><th>模型限制</th><th>限额 / 预算 / 有效期</th><th>输出速度（7 天）</th><th>创建时间</th><th style="min-width:220px">操作</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="8" class="has-text-grey">加载中…</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -94,7 +94,7 @@ async function load() {
     const keys = keysCache = await api('/api/admin/keys');
     const tb = document.getElementById('rows');
     if (!keys.length) {
-      tb.innerHTML = '<tr><td colspan="7" class="has-text-grey">还没有密钥，上方输入名称签发一个</td></tr>';
+      tb.innerHTML = '<tr><td colspan="8" class="has-text-grey">还没有密钥，上方输入名称签发一个</td></tr>';
       return;
     }
     tb.innerHTML = keys.map(k => {
@@ -109,12 +109,17 @@ async function load() {
       if (k.budget_usd) limits.push('$' + k.budget_usd + '/' + (k.budget_period === 'monthly' ? '月' : '日'));
       if (k.budget_tokens) limits.push(k.budget_tokens.toLocaleString() + ' tok/' + (k.budget_period === 'monthly' ? '月' : '日'));
       if (k.expires_at) limits.push('至 ' + k.expires_at);
+      const tps = k.avg_tps ? k.avg_tps.toFixed(1) + ' tok/s' : '';
+      const tpsCell = tps
+        ? `<span title="近 7 天成功请求 ${fmtInt(k.recent_requests)} 次的加权平均">${esc(tps)}</span>`
+        : '<span class="has-text-grey">--</span>';
       return `<tr>
       <td>${k.id}</td>
       <td><b>${esc(k.name)}</b></td>
       <td class="mono" data-keycell="${k.id}" data-shown="0">${esc(k.key)}</td>
       <td>${lim}</td>
       <td>${limits.length ? esc(limits.join('，')) : '<span class="has-text-grey">不限</span>'}</td>
+      <td class="mono">${tpsCell}</td>
       <td class="mono">${fmtTs(k.created_at)}</td>
       <td>
         <button class="button is-small" onclick="toggleKey(${k.id})">显示</button>

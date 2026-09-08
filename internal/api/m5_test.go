@@ -257,6 +257,63 @@ func TestPruneLogs(t *testing.T) {
 	}
 }
 
+func TestKeySpeedStats(t *testing.T) {
+	srv, st := newTestServer(t)
+	keyStr := mustCreateKey(t, st)
+	k, err := st.LookupAPIKey(keyStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insert := func(completion, latency, ttfb int64, hasErr bool) {
+		l := &store.RequestLog{
+			Model: "m", Protocol: "openai", APIKeyID: k.ID, Status: 200,
+			LatencyMs: latency, TtfbMs: ttfb, CompletionTokens: completion,
+		}
+		if hasErr {
+			l.Error = "boom"
+		}
+		if err := st.InsertRequestLog(l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 两条有效样本：100 tok/1s + 300 tok/3s → 加权平均 100 tok/s
+	insert(100, 2000, 1000, false)
+	insert(300, 4000, 1000, false)
+	// 无输出/出错/数值倒挂的行不计入
+	insert(0, 2000, 1000, false)
+	insert(100, 2000, 1000, true)
+	insert(100, 500, 1000, false)
+
+	stats, err := st.KeySpeedStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st1, ok := stats[k.ID]
+	if !ok || st1.Requests != 2 || st1.Tps() != 100 {
+		t.Fatalf("speed stats = %+v, want 2 req @ 100 tok/s", st1)
+	}
+
+	// 管理 API 暴露 avg_tps
+	rec := do(srv, "POST", "/api/admin/login", `{"password":"testpw"}`, nil)
+	var login struct {
+		Token string `json:"token"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &login)
+	out := do(srv, "GET", "/api/admin/keys", "",
+		map[string]string{"Authorization": "Bearer " + login.Token})
+	var keys []struct {
+		ID     int64   `json:"id"`
+		AvgTps float64 `json:"avg_tps"`
+		Reqs   int64   `json:"recent_requests"`
+	}
+	if err := json.Unmarshal(out.Body.Bytes(), &keys); err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0].AvgTps != 100 || keys[0].Reqs != 2 {
+		t.Fatalf("keys api speed = %+v", keys)
+	}
+}
+
 func TestDeepHealthz(t *testing.T) {
 	srv, _ := newTestServer(t)
 	rec := do(srv, "GET", "/healthz?deep=1", "", nil)

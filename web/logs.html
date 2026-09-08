@@ -44,9 +44,9 @@
     <table class="table is-fullwidth is-size-7 is-hoverable" style="border-radius:12px">
       <thead><tr>
         <th>时间</th><th>模型</th><th>协议</th><th>状态</th><th>延迟/TTFB</th>
-        <th>输入 Tok</th><th>输出 Tok</th><th>成本</th><th>渠道/密钥</th>
+        <th>输入 Tok</th><th>输出 Tok</th><th>输出速度</th><th>成本</th><th>渠道/密钥</th>
       </tr></thead>
-      <tbody id="rows"><tr><td colspan="9" class="has-text-grey">加载中…</td></tr></tbody>
+      <tbody id="rows"><tr><td colspan="10" class="has-text-grey">加载中…</td></tr></tbody>
     </table>
   </div>
 
@@ -115,11 +115,13 @@ async function load() {
     document.getElementById('totalLine').textContent = `共 ${fmtInt(page.total)} 条`;
     const items = page.items || [];
     const tb = document.getElementById('rows');
-    if (!items.length) { tb.innerHTML = '<tr><td colspan="9" class="has-text-grey">无记录</td></tr>'; return; }
+    if (!items.length) { tb.innerHTML = '<tr><td colspan="10" class="has-text-grey">无记录</td></tr>'; return; }
     tb.innerHTML = items.map(l => {
       const isErr = l.status >= 400 || l.error;
       const chName = (channels.find(c => c.id === l.channel_id) || {}).name || ('#' + l.channel_id);
       const keyName = (keys.find(k => k.id === l.api_key_id) || {}).name || ('#' + l.api_key_id);
+      const tps = (l.completion_tokens > 0 && l.latency_ms > l.ttfb_ms)
+        ? (l.completion_tokens / ((l.latency_ms - l.ttfb_ms) / 1000)).toFixed(1) + ' tok/s' : '--';
       return `<tr ${l.error ? `style="cursor:pointer" title="点击查看错误详情" onclick="showErr('${String(l.id)}', this)" data-err="${esc(l.error)}"` : ''}>
         <td class="mono">${fmtTs(l.ts)}</td>
         <td class="mono">${esc(l.model)}${l.app ? ` <span class="tag is-link is-light is-size-7" style="margin-left:.3rem">${esc(l.app)}</span>` : ''}</td>
@@ -128,6 +130,7 @@ async function load() {
         <td class="mono">${l.latency_ms}ms / ${l.ttfb_ms}ms</td>
         <td>${fmtInt(l.prompt_tokens)}</td>
         <td>${fmtInt(l.completion_tokens)}</td>
+        <td class="mono">${tps}</td>
         <td>${fmtUSD(l.cost_usd)}</td>
         <td class="has-text-grey">${esc(chName)} / ${esc(keyName)}</td>
       </tr>`;

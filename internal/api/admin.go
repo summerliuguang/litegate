@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/subtle"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -458,6 +459,9 @@ type apiKeyOut struct {
 	BudgetUSD     float64  `json:"budget_usd"`
 	BudgetPeriod  string   `json:"budget_period"`
 	BudgetTokens  int64    `json:"budget_tokens"`
+	// 近 7 天输出速度统计（成功且可计算的请求）
+	AvgTps       float64 `json:"avg_tps"`
+	RecentReqs   int64   `json:"recent_requests"`
 }
 
 func (a *admin) listKeys(w http.ResponseWriter, _ *http.Request) {
@@ -466,14 +470,25 @@ func (a *admin) listKeys(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	speeds, err := a.st.KeySpeedStats()
+	if err != nil {
+		speeds = map[int64]store.KeySpeedStat{} // 统计失败不影响列表主体
+	}
 	out := make([]apiKeyOut, 0, len(keys))
 	for i := range keys {
 		k := &keys[i]
+		var tps float64
+		var recent int64
+		if st, ok := speeds[k.ID]; ok {
+			tps = math.Round(st.Tps()*10) / 10
+			recent = st.Requests
+		}
 		out = append(out, apiKeyOut{
 			ID: k.ID, Key: maskApiKey(k.Key), Name: k.Name,
 			AllowedModels: k.AllowedModels, Enabled: k.Enabled, CreatedAt: k.CreatedAt,
 			ExpiresAt: k.ExpiresAt, RPMLimit: k.RPMLimit, TPMLimit: k.TPMLimit,
 			BudgetUSD: k.BudgetUSD, BudgetPeriod: k.BudgetPeriod, BudgetTokens: k.BudgetTokens,
+			AvgTps: tps, RecentReqs: recent,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
