@@ -18,7 +18,7 @@
     按优先级降序、同级按权重加权轮询；上游故障自动转移到下一优先级。base_url 需含版本前缀（如 <code>https://api.openai.com/v1</code>）。
   </p>
   <div class="table-container card">
-    <table class="table is-fullwidth is-size-7" style="border-radius:12px">
+    <table class="table is-fullwidth is-size-7 mobile-cards" style="border-radius:12px">
       <thead><tr>
         <th>ID</th><th>名称</th><th>类型</th><th>Base URL</th><th>密钥</th><th>模型</th>
         <th>优先级</th><th>权重</th><th>状态</th><th style="min-width:220px">操作</th>
@@ -104,17 +104,17 @@ function renderRows() {
     return;
   }
   tb.innerHTML = channels.map(c => `<tr>
-      <td>${c.id}</td>
-      <td><b>${esc(c.name)}</b>${c.remark ? `<br><span class="has-text-grey is-size-7">${esc(c.remark)}</span>` : ''}</td>
-      <td><span class="tag is-light">${esc(c.type)}</span></td>
-      <td class="mono" style="max-width:220px;word-break:break-all">${esc(c.base_url)}</td>
-      <td class="mono" style="max-width:200px;word-break:break-all">${(c.api_keys || []).map(k =>
+      <td data-label="ID">${c.id}</td>
+      <td data-label="名称"><b>${esc(c.name)}</b>${c.remark ? `<br><span class="has-text-grey is-size-7">${esc(c.remark)}</span>` : ''}</td>
+      <td data-label="类型"><span class="tag is-light">${esc(c.type)}</span></td>
+      <td data-label="Base URL" class="mono" style="word-break:break-all">${esc(c.base_url)}</td>
+      <td data-label="密钥" class="mono" style="word-break:break-all">${(c.api_keys || []).map(k =>
         `<span class="tag is-light is-size-7" style="margin:0 0 .2rem${k.enabled ? '' : ';opacity:.45;text-decoration:line-through'}">${esc(k.masked)}</span>`).join(' ') || '<span class="has-text-grey">无</span>'}</td>
-      <td>${c.models && c.models.length ? esc(c.models.slice(0, 3).join(', ')) + (c.models.length > 3 ? ` 等 ${c.models.length} 个` : '') : '<span class="has-text-grey">任意</span>'}${c.disabled_models && c.disabled_models.length ? `<br><span class="has-text-grey is-size-7">已禁用 ${c.disabled_models.length} 个</span>` : ''}</td>
-      <td>${c.priority}</td>
-      <td>${c.weight}</td>
-      <td>${c.enabled ? '<span class="status ok">启用</span>' : '<span class="status">停用</span>'}</td>
-      <td>
+      <td data-label="模型">${c.models && c.models.length ? esc(c.models.slice(0, 3).join(', ')) + (c.models.length > 3 ? ` 等 ${c.models.length} 个` : '') : '<span class="has-text-grey">任意</span>'}${c.disabled_models && c.disabled_models.length ? `<br><span class="has-text-grey is-size-7">已禁用 ${c.disabled_models.length} 个</span>` : ''}</td>
+      <td data-label="优先级">${c.priority}</td>
+      <td data-label="权重">${c.weight}</td>
+      <td data-label="状态">${c.enabled ? '<span class="status ok">启用</span>' : '<span class="status">停用</span>'}</td>
+      <td data-label="操作">
         <button class="button is-small is-link is-light" onclick="testCh(${c.id})">测试</button>
         <button class="button is-small" onclick="openEdit(${c.id})">编辑</button>
         <button class="button is-small is-danger is-light" onclick="delCh(${c.id}, '${esc(c.name)}')">删除</button>

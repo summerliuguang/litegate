@@ -21,7 +21,7 @@
     下游客户端用虚拟密钥访问网关（上游真实密钥保存在渠道里，不会暴露）。OpenAI 协议用 <code>Authorization: Bearer</code>，Anthropic 协议用 <code>x-api-key</code>，Base URL 填 <code class="mono" id="baseHint"></code>。
   </p>
   <div class="table-container card">
-    <table class="table is-fullwidth is-size-7" style="border-radius:12px">
+    <table class="table is-fullwidth is-size-7 mobile-cards" style="border-radius:12px">
       <thead><tr><th>ID</th><th>名称</th><th>密钥</th><th>模型限制</th><th>限额 / 预算 / 有效期</th><th>输出速度（7 天）</th><th>创建时间</th><th style="min-width:220px">操作</th></tr></thead>
       <tbody id="rows"><tr><td colspan="8" class="has-text-grey">加载中…</td></tr></tbody>
     </table>
@@ -114,14 +114,14 @@ async function load() {
         ? `<span title="近 7 天成功请求 ${fmtInt(k.recent_requests)} 次的加权平均">${esc(tps)}</span>`
         : '<span class="has-text-grey">--</span>';
       return `<tr>
-      <td>${k.id}</td>
-      <td><b>${esc(k.name)}</b></td>
-      <td class="mono" data-keycell="${k.id}" data-shown="0">${esc(k.key)}</td>
-      <td>${lim}</td>
-      <td>${limits.length ? esc(limits.join('，')) : '<span class="has-text-grey">不限</span>'}</td>
-      <td class="mono">${tpsCell}</td>
-      <td class="mono">${fmtTs(k.created_at)}</td>
-      <td>
+      <td data-label="ID">${k.id}</td>
+      <td data-label="名称"><b>${esc(k.name)}</b></td>
+      <td data-label="密钥" class="mono" data-keycell="${k.id}" data-shown="0">${esc(k.key)}</td>
+      <td data-label="模型限制">${lim}</td>
+      <td data-label="限额">${limits.length ? esc(limits.join('，')) : '<span class="has-text-grey">不限</span>'}</td>
+      <td data-label="输出速度" class="mono">${tpsCell}</td>
+      <td data-label="创建时间" class="mono">${fmtTs(k.created_at)}</td>
+      <td data-label="操作">
         <button class="button is-small" onclick="toggleKey(${k.id})">显示</button>
         <button class="button is-small" onclick="copyKey(${k.id})">复制</button>
         <button class="button is-small" onclick="openEditKey(${k.id})">编辑</button>

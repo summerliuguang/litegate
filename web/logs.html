@@ -41,7 +41,7 @@
   </form>
 
   <div class="table-container card">
-    <table class="table is-fullwidth is-size-7 is-hoverable" style="border-radius:12px">
+    <table class="table is-fullwidth is-size-7 is-hoverable mobile-cards" style="border-radius:12px">
       <thead><tr>
         <th>时间</th><th>模型</th><th>协议</th><th>状态</th><th>延迟/TTFB</th>
         <th>输入 Tok</th><th>输出 Tok</th><th>输出速度</th><th>成本</th><th>渠道/密钥</th>
@@ -123,16 +123,16 @@ async function load() {
       const tps = (l.completion_tokens > 0 && l.latency_ms > l.ttfb_ms)
         ? (l.completion_tokens / ((l.latency_ms - l.ttfb_ms) / 1000)).toFixed(1) + ' tok/s' : '--';
       return `<tr ${l.error ? `style="cursor:pointer" title="点击查看错误详情" onclick="showErr('${String(l.id)}', this)" data-err="${esc(l.error)}"` : ''}>
-        <td class="mono">${fmtTs(l.ts)}</td>
-        <td class="mono">${esc(l.model)}${l.app ? ` <span class="tag is-link is-light is-size-7" style="margin-left:.3rem">${esc(l.app)}</span>` : ''}</td>
-        <td><span class="tag is-light">${esc(l.protocol)}</span></td>
-        <td>${isErr ? `<span class="status bad">${l.status}</span>` : `<span class="status ok">${l.status}</span>`}</td>
-        <td class="mono">${l.latency_ms}ms / ${l.ttfb_ms}ms</td>
-        <td>${fmtInt(l.prompt_tokens)}</td>
-        <td>${fmtInt(l.completion_tokens)}</td>
-        <td class="mono">${tps}</td>
-        <td>${fmtUSD(l.cost_usd)}</td>
-        <td class="has-text-grey">${esc(chName)} / ${esc(keyName)}</td>
+        <td data-label="时间" class="mono">${fmtTs(l.ts)}</td>
+        <td data-label="模型" class="mono">${esc(l.model)}${l.app ? ` <span class="tag is-link is-light is-size-7" style="margin-left:.3rem">${esc(l.app)}</span>` : ''}</td>
+        <td data-label="协议"><span class="tag is-light">${esc(l.protocol)}</span></td>
+        <td data-label="状态">${isErr ? `<span class="status bad">${l.status}</span>` : `<span class="status ok">${l.status}</span>`}</td>
+        <td data-label="延迟/TTFB" class="mono">${l.latency_ms}ms / ${l.ttfb_ms}ms</td>
+        <td data-label="输入">${fmtInt(l.prompt_tokens)}</td>
+        <td data-label="输出">${fmtInt(l.completion_tokens)}</td>
+        <td data-label="输出速度" class="mono">${tps}</td>
+        <td data-label="成本">${fmtUSD(l.cost_usd)}</td>
+        <td data-label="渠道/密钥" class="has-text-grey">${esc(chName)} / ${esc(keyName)}</td>
       </tr>`;
     }).join('');
     document.getElementById('btnPrev').disabled = offset <= 0;

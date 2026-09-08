@@ -35,7 +35,7 @@
   </form>
 
   <div class="table-container card">
-    <table class="table is-fullwidth is-size-7" style="border-radius:12px">
+    <table class="table is-fullwidth is-size-7 mobile-cards" style="border-radius:12px">
       <thead><tr><th>模型</th><th>输入价 $/M</th><th>输出价 $/M</th><th>更新时间</th><th style="min-width:90px">操作</th></tr></thead>
       <tbody id="rows"><tr><td colspan="5" class="has-text-grey">加载中…</td></tr></tbody>
     </table>
@@ -58,11 +58,11 @@ async function load() {
       return;
     }
     tb.innerHTML = prices.map(p => `<tr>
-      <td class="mono"><b>${esc(p.model)}</b></td>
-      <td>${p.input_price}</td>
-      <td>${p.output_price}</td>
-      <td class="mono">${fmtTs(p.updated_at)}</td>
-      <td><button class="button is-small is-danger is-light" onclick="delPrice('${esc(p.model)}')">删除</button></td>
+      <td data-label="模型" class="mono"><b>${esc(p.model)}</b></td>
+      <td data-label="输入价 $/M">${p.input_price}</td>
+      <td data-label="输出价 $/M">${p.output_price}</td>
+      <td data-label="更新时间" class="mono">${fmtTs(p.updated_at)}</td>
+      <td data-label="操作"><button class="button is-small is-danger is-light" onclick="delPrice('${esc(p.model)}')">删除</button></td>
     </tr>`).join('');
   } catch (ex) { toast('加载失败：' + ex.message, false); }
 }

@@ -24,3 +24,29 @@
 .bar-track{flex:1;background:var(--line,#eef0f6);border-radius:999px;height:14px;overflow:hidden}
 .bar-fill{height:100%;background:var(--primary,#3e7bfa);border-radius:999px;min-width:2px;transition:width .3s ease}
 .bar-val{width:6.5rem;font-size:.75rem;color:var(--muted,#666);text-align:right;flex:none}
+
+/* 统计卡片网格（仪表盘）：桌面 4 列，移动端 2 列 */
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.9rem;margin-bottom:1.2rem}
+.stat-grid .card{height:100%}
+
+/* 移动端适配：统计网格两列、表格转卡片（配合 td 的 data-label）、弹窗触控 */
+@media(max-width:768px){
+  .wrap{padding:.9rem .75rem 3rem}
+  .stat-grid{grid-template-columns:repeat(2,1fr);gap:.6rem}
+  .stat-num{font-size:1.3rem}
+  .title.is-4{font-size:1.25rem}
+
+  table.mobile-cards,table.mobile-cards tbody{display:block;width:100%}
+  table.mobile-cards thead{display:none}
+  table.mobile-cards tr{display:block;background:var(--card,#fff);border:1px solid var(--line,#e8eaf0);border-radius:12px;padding:.4rem .8rem;margin-bottom:.7rem}
+  table.mobile-cards td{display:flex;justify-content:space-between;align-items:center;gap:.8rem;border-bottom:none;padding:.26rem 0;text-align:right}
+  table.mobile-cards td::before{content:attr(data-label);font-weight:600;font-size:.72rem;color:var(--muted,#a0a0b8);text-align:left;flex:none;white-space:nowrap}
+  table.mobile-cards td[colspan]{display:block;text-align:center}
+  .table-container.card{background:transparent;border:none;padding:0;overflow:visible}
+
+  .modal-card{width:94vw}
+  .modal-card-body{max-height:72vh;-webkit-overflow-scrolling:touch}
+  .modal-card-foot{flex-wrap:wrap;gap:.4rem}
+  .button.is-small{font-size:.85rem}
+  .field .button.is-fullwidth{height:auto;min-height:2.4em}
+}

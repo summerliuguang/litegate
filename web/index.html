@@ -13,50 +13,50 @@
   <h1 class="title is-4" style="margin:0">仪表盘</h1>
   <p class="is-size-7 has-text-grey" style="margin:.3rem 0 1rem">今日与近 7 天用量 · 每 10 秒自动刷新</p>
 
-  <div class="tile is-ancestor">
-    <div class="tile is-parent is-3"><div class="tile is-child card"><div class="card-content has-text-centered">
+  <div class="stat-grid">
+    <div class="card"><div class="card-content has-text-centered">
       <p class="heading">今日请求</p>
       <p class="stat-num" id="vReq">--</p>
       <p class="has-text-grey is-size-7" id="vErr">错误 --</p>
-    </div></div></div>
-    <div class="tile is-parent is-3"><div class="tile is-child card"><div class="card-content has-text-centered">
+    </div></div>
+    <div class="card"><div class="card-content has-text-centered">
       <p class="heading">今日 Tokens</p>
       <p class="stat-num" id="vTok">--</p>
       <p class="has-text-grey is-size-7" id="vTokDetail">输入 -- / 输出 --</p>
-    </div></div></div>
-    <div class="tile is-parent is-3"><div class="tile is-child card"><div class="card-content has-text-centered">
+    </div></div>
+    <div class="card"><div class="card-content has-text-centered">
       <p class="heading">今日成本</p>
       <p class="stat-num" id="vCost">--</p>
       <p class="has-text-grey is-size-7">美元（按价格表核算）</p>
-    </div></div></div>
-    <div class="tile is-parent is-3"><div class="tile is-child card"><div class="card-content has-text-centered">
+    </div></div>
+    <div class="card"><div class="card-content has-text-centered">
       <p class="heading">渠道 / 密钥</p>
       <p class="stat-num" id="vCh">--</p>
       <p class="has-text-grey is-size-7" id="vKey">密钥 -- 个</p>
-    </div></div></div>
+    </div></div>
   </div>
 
-  <div class="tile is-ancestor">
-    <div class="tile is-parent"><div class="tile is-child card"><div class="card-content has-text-centered">
+  <div class="stat-grid">
+    <div class="card"><div class="card-content has-text-centered">
       <p class="heading">延迟 P50 / P95</p>
       <p class="stat-num" id="vP50">--</p>
       <p class="has-text-grey is-size-7" id="vP95">P95 --</p>
-    </div></div></div>
-    <div class="tile is-parent"><div class="tile is-child card"><div class="card-content has-text-centered">
+    </div></div>
+    <div class="card"><div class="card-content has-text-centered">
       <p class="heading">实时 RPM / TPM</p>
       <p class="stat-num" id="vRpm">--</p>
       <p class="has-text-grey is-size-7" id="vTpm">TPM --（最近 60 秒）</p>
-    </div></div></div>
-    <div class="tile is-parent"><div class="tile is-child card"><div class="card-content has-text-centered">
+    </div></div>
+    <div class="card"><div class="card-content has-text-centered">
       <p class="heading">平均生成速度</p>
       <p class="stat-num" id="vTps">--</p>
       <p class="has-text-grey is-size-7">输出 token/秒（今日成功请求）</p>
-    </div></div></div>
-    <div class="tile is-parent"><div class="tile is-child card"><div class="card-content has-text-centered">
+    </div></div>
+    <div class="card"><div class="card-content has-text-centered">
       <p class="heading">网关版本</p>
       <p class="stat-num" id="vVer" style="font-size:1.6rem">--</p>
       <p class="has-text-grey is-size-7" id="vUptime">运行 --</p>
-    </div></div></div>
+    </div></div>
   </div>
 
   <div class="card" style="margin-bottom:1.2rem">
@@ -71,7 +71,7 @@
       <div class="card">
         <div class="card-content">
           <h2 class="title is-5">近 7 天按模型 Top10</h2>
-          <div class="table-container"><table class="table is-fullwidth is-size-7">
+          <div class="table-container"><table class="table is-fullwidth is-size-7 mobile-cards">
             <thead><tr><th>模型</th><th>请求</th><th>Tokens</th><th>成本</th></tr></thead>
             <tbody id="byModel"><tr><td colspan="4" class="has-text-grey">加载中…</td></tr></tbody>
           </table></div>
@@ -82,7 +82,7 @@
       <div class="card">
         <div class="card-content">
           <h2 class="title is-5">近 7 天按渠道 Top10</h2>
-          <div class="table-container"><table class="table is-fullwidth is-size-7">
+          <div class="table-container"><table class="table is-fullwidth is-size-7 mobile-cards">
             <thead><tr><th>渠道</th><th>请求</th><th>Tokens</th><th>成本</th></tr></thead>
             <tbody id="byChannel"><tr><td colspan="4" class="has-text-grey">加载中…</td></tr></tbody>
           </table></div>
@@ -94,7 +94,7 @@
   <div class="card" id="byAppCard" style="display:none">
     <div class="card-content">
       <h2 class="title is-5">今日按应用分摊<span class="has-text-grey is-size-7" style="margin-left:.5rem">客户端带 <code>X-LiteGate-App</code> 头即可归因</span></h2>
-      <div class="table-container"><table class="table is-fullwidth is-size-7">
+      <div class="table-container"><table class="table is-fullwidth is-size-7 mobile-cards">
         <thead><tr><th>应用</th><th>请求</th><th>输入</th><th>输出</th><th>成本</th></tr></thead>
         <tbody id="byApp"></tbody>
       </table></div>
@@ -107,9 +107,9 @@
 renderNav();
 
 function usageRow(u) {
-  return `<tr><td class="mono">${esc(u.model || u.channel_name || '(已删除渠道)')}</td>` +
-    `<td>${fmtInt(u.requests)}</td><td>${fmtTok(Number(u.prompt_tokens) + Number(u.completion_tokens))}</td>` +
-    `<td>${fmtUSD(u.cost_usd)}</td></tr>`;
+  return `<tr><td class="mono" data-label="名称">${esc(u.model || u.channel_name || '(已删除渠道)')}</td>` +
+    `<td data-label="请求">${fmtInt(u.requests)}</td><td data-label="Tokens">${fmtTok(Number(u.prompt_tokens) + Number(u.completion_tokens))}</td>` +
+    `<td data-label="成本">${fmtUSD(u.cost_usd)}</td></tr>`;
 }
 
 async function load() {
