@@ -107,7 +107,7 @@
 renderNav();
 
 function usageRow(u) {
-  return `<tr><td class="mono" data-label="名称">${esc(u.model || u.channel_name || '(已删除渠道)')}</td>` +
+  return `<tr><td class="mono cell-col" data-label="名称">${esc(u.model || u.channel_name || '(已删除渠道)')}</td>` +
     `<td data-label="请求">${fmtInt(u.requests)}</td><td data-label="Tokens">${fmtTok(Number(u.prompt_tokens) + Number(u.completion_tokens))}</td>` +
     `<td data-label="成本">${fmtUSD(u.cost_usd)}</td></tr>`;
 }
@@ -163,9 +163,9 @@ async function load() {
     if (apps.length && (apps.length > 1 || apps[0].app !== '(未标注)')) {
       card.style.display = '';
       document.getElementById('byApp').innerHTML = apps.map(a =>
-        `<tr><td class="mono">${esc(a.app)}</td><td>${fmtInt(a.requests)}</td>` +
-        `<td>${fmtTok(a.prompt_tokens)}</td><td>${fmtTok(a.completion_tokens)}</td>` +
-        `<td>${fmtUSD(a.cost_usd)}</td></tr>`).join('');
+        `<tr><td class="mono cell-col" data-label="应用">${esc(a.app)}</td><td data-label="请求">${fmtInt(a.requests)}</td>` +
+        `<td data-label="输入">${fmtTok(a.prompt_tokens)}</td><td data-label="输出">${fmtTok(a.completion_tokens)}</td>` +
+        `<td data-label="成本">${fmtUSD(a.cost_usd)}</td></tr>`).join('');
     } else {
       card.style.display = 'none';
     }

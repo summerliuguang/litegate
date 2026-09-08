@@ -124,7 +124,7 @@ async function load() {
         ? (l.completion_tokens / ((l.latency_ms - l.ttfb_ms) / 1000)).toFixed(1) + ' tok/s' : '--';
       return `<tr ${l.error ? `style="cursor:pointer" title="点击查看错误详情" onclick="showErr('${String(l.id)}', this)" data-err="${esc(l.error)}"` : ''}>
         <td data-label="时间" class="mono">${fmtTs(l.ts)}</td>
-        <td data-label="模型" class="mono">${esc(l.model)}${l.app ? ` <span class="tag is-link is-light is-size-7" style="margin-left:.3rem">${esc(l.app)}</span>` : ''}</td>
+        <td data-label="模型" class="mono cell-col">${esc(l.model)}${l.app ? ` <span class="tag is-link is-light is-size-7" style="margin-left:.3rem">${esc(l.app)}</span>` : ''}</td>
         <td data-label="协议"><span class="tag is-light">${esc(l.protocol)}</span></td>
         <td data-label="状态">${isErr ? `<span class="status bad">${l.status}</span>` : `<span class="status ok">${l.status}</span>`}</td>
         <td data-label="延迟/TTFB" class="mono">${l.latency_ms}ms / ${l.ttfb_ms}ms</td>

@@ -10,8 +10,8 @@
 </head>
 <body data-page="keys">
 <div class="wrap">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
-    <h1 class="title is-4" style="margin:0">虚拟密钥</h1>
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem">
+    <h1 class="title is-4" style="margin:0;white-space:nowrap">虚拟密钥</h1>
     <form class="field has-addons" style="margin:0" id="formNew">
       <input class="input is-small" id="fName" placeholder="密钥名称，如 my-claude" style="width:200px" required>
       <button class="button is-link is-small" type="submit">＋ 签发</button>
@@ -116,12 +116,12 @@ async function load() {
       return `<tr>
       <td data-label="ID">${k.id}</td>
       <td data-label="名称"><b>${esc(k.name)}</b></td>
-      <td data-label="密钥" class="mono" data-keycell="${k.id}" data-shown="0">${esc(k.key)}</td>
-      <td data-label="模型限制">${lim}</td>
-      <td data-label="限额">${limits.length ? esc(limits.join('，')) : '<span class="has-text-grey">不限</span>'}</td>
+      <td data-label="密钥" class="mono cell-col" data-keycell="${k.id}" data-shown="0">${esc(k.key)}</td>
+      <td data-label="模型限制" class="cell-col">${lim}</td>
+      <td data-label="限额" class="cell-col">${limits.length ? esc(limits.join('，')) : '<span class="has-text-grey">不限</span>'}</td>
       <td data-label="输出速度" class="mono">${tpsCell}</td>
       <td data-label="创建时间" class="mono">${fmtTs(k.created_at)}</td>
-      <td data-label="操作">
+      <td data-label="操作" class="cell-col">
         <button class="button is-small" onclick="toggleKey(${k.id})">显示</button>
         <button class="button is-small" onclick="copyKey(${k.id})">复制</button>
         <button class="button is-small" onclick="openEditKey(${k.id})">编辑</button>

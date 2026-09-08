@@ -39,9 +39,14 @@
   table.mobile-cards,table.mobile-cards tbody{display:block;width:100%}
   table.mobile-cards thead{display:none}
   table.mobile-cards tr{display:block;background:var(--card,#fff);border:1px solid var(--line,#e8eaf0);border-radius:12px;padding:.4rem .8rem;margin-bottom:.7rem}
-  table.mobile-cards td{display:flex;justify-content:space-between;align-items:center;gap:.8rem;border-bottom:none;padding:.26rem 0;text-align:right}
+  table.mobile-cards td{display:flex;justify-content:space-between;align-items:center;gap:.8rem;border-bottom:none;padding:.26rem 0;text-align:right;overflow-wrap:anywhere}
   table.mobile-cards td::before{content:attr(data-label);font-weight:600;font-size:.72rem;color:var(--muted,#a0a0b8);text-align:left;flex:none;white-space:nowrap}
   table.mobile-cards td[colspan]{display:block;text-align:center}
+  /* 卡片内标签允许多行（Bulma tag 默认 nowrap，长模型名会撑破卡片） */
+  table.mobile-cards td .tag{white-space:normal;height:auto;min-height:1.7em;overflow-wrap:anywhere}
+  /* 长内容竖排单元格：列名独占一行、内容左对齐（密钥/模型列表/操作按钮组等） */
+  table.mobile-cards td.cell-col{display:block;text-align:left}
+  table.mobile-cards td.cell-col::before{display:block;margin-bottom:.15rem}
   .table-container.card{background:transparent;border:none;padding:0;overflow:visible}
 
   .modal-card{width:94vw}
