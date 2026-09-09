@@ -13,14 +13,15 @@
   <h1 class="title is-4" style="margin:0 0 .3rem">模型价格</h1>
   <p class="is-size-7 has-text-grey" style="margin-bottom:1rem">
     单位：/ 百万 token，币种跟随各模型官方定价页（<b>$</b> 美元 / <b>¥</b> 人民币），不做汇率换算；
-    成本按各行币种数值直接累计。未配置价格的模型不计成本（记 0）。
+    成本按各行币种数值直接累计。缓存命中价留空时自动按输入（未命中）价 1/10 计。
+    未配置价格的模型不计成本（记 0）。
     价格匹配先精确、再最长前缀：<code>gpt-4o</code> 覆盖 <code>gpt-4o-2024-08-06</code>。
   </p>
 
   <form class="card" style="margin-bottom:1.2rem" id="formUp">
     <div class="card-content">
       <div class="columns is-multiline">
-        <div class="column is-half">
+        <div class="column is-one-third">
           <label class="label is-size-7">模型名（支持 <code>模型名前缀</code> 写法匹配一族）</label>
           <input class="input is-small mono" id="fModel" placeholder="gpt-4o" required>
         </div>
@@ -33,9 +34,11 @@
             </select>
           </div>
         </div>
-        <div class="column"><label class="label is-size-7">输入价 /M</label>
+        <div class="column"><label class="label is-size-7">输入(未命中) /M</label>
           <input class="input is-small" id="fIn" type="number" min="0" step="any" placeholder="2.5" required></div>
-        <div class="column"><label class="label is-size-7">输出价 /M</label>
+        <div class="column"><label class="label is-size-7">输入(命中) /M</label>
+          <input class="input is-small" id="fCache" type="number" min="0" step="any" placeholder="留空=自动 1/10"></div>
+        <div class="column"><label class="label is-size-7">输出 /M</label>
           <input class="input is-small" id="fOut" type="number" min="0" step="any" placeholder="10" required></div>
         <div class="column is-narrow" style="display:flex;align-items:flex-end">
           <button class="button is-link is-small" type="submit">保存（新建或覆盖）</button>
@@ -46,8 +49,8 @@
 
   <div class="table-container card">
     <table class="table is-fullwidth is-size-7 mobile-cards" style="border-radius:12px">
-      <thead><tr><th>模型</th><th>输入价 /M</th><th>输出价 /M</th><th>更新时间</th><th style="min-width:90px">操作</th></tr></thead>
-      <tbody id="rows"><tr><td colspan="5" class="has-text-grey">加载中…</td></tr></tbody>
+      <thead><tr><th>模型</th><th>输入(未命中) /M</th><th>输入(命中) /M</th><th>输出 /M</th><th>更新时间</th><th style="min-width:90px">操作</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="6" class="has-text-grey">加载中…</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -67,15 +70,17 @@ async function load() {
     const prices = await api('/api/admin/prices');
     const tb = document.getElementById('rows');
     if (!prices.length) {
-      tb.innerHTML = '<tr><td colspan="5" class="has-text-grey">还没有价格配置，用上方表单添加</td></tr>';
+      tb.innerHTML = '<tr><td colspan="6" class="has-text-grey">还没有价格配置，用上方表单添加</td></tr>';
       return;
     }
     tb.innerHTML = prices.map(p => {
       const s = curSym(p.currency);
+      const hit = p.cache_read_price > 0 ? `${s}${p.cache_read_price}` : `自动（${s}${(p.input_price * 0.1).toFixed(2).replace(/\.?0+$/, '')}）`;
       return `<tr>
       <td data-label="模型" class="mono cell-col"><b>${esc(p.model)}</b></td>
-      <td data-label="输入价 /M">${s}${p.input_price}</td>
-      <td data-label="输出价 /M">${s}${p.output_price}</td>
+      <td data-label="输入(未命中) /M">${s}${p.input_price}</td>
+      <td data-label="输入(命中) /M">${hit}</td>
+      <td data-label="输出 /M">${s}${p.output_price}</td>
       <td data-label="更新时间" class="mono">${fmtTs(p.updated_at)}</td>
       <td data-label="操作"><button class="button is-small is-danger is-light" onclick="delPrice('${esc(p.model)}')">删除</button></td>
     </tr>`;
@@ -89,6 +94,7 @@ document.getElementById('formUp').addEventListener('submit', async e => {
     model: document.getElementById('fModel').value.trim(),
     currency: document.getElementById('fCurrency').value,
     input_price: parseFloat(document.getElementById('fIn').value),
+    cache_read_price: parseFloat(document.getElementById('fCache').value) || 0,
     output_price: parseFloat(document.getElementById('fOut').value),
   };
   if (!body.model || isNaN(body.input_price) || isNaN(body.output_price)) return;

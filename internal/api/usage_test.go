@@ -138,6 +138,11 @@ func TestCostOf(t *testing.T) {
 	if got := store.CostOf(p, 1_000_000, 0, 200_000, 0); math.Abs(got-2.1) > 1e-9 {
 		t.Fatalf("cache-write cost = %v, want 2.1", got)
 	}
+	// 显式缓存命中价优先于 1/10 自动折算：60 万命中×0.1 + 40 万未命中×2 = 0.86
+	pc := &store.ModelPrice{InputPrice: 2, OutputPrice: 4, CacheReadPrice: 0.1}
+	if got := store.CostOf(pc, 1_000_000, 600_000, 0, 0); math.Abs(got-0.86) > 1e-9 {
+		t.Fatalf("explicit cache-read cost = %v, want 0.86", got)
+	}
 }
 
 func TestProxyLogsUsageAndCost(t *testing.T) {

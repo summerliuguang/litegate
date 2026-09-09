@@ -67,12 +67,14 @@ curl -X POST http://127.0.0.1:8080/api/admin/channels \
 `models` 留空表示该渠道可服务任意模型。
 
 给模型配价格后即可自动核算成本（单位：/ 百万 token；`currency` 可选标注币种
-`USD`（默认）或 `CNY`，跟随各模型官方定价页，**不做汇率换算**，成本按各行币种数值直接累计）：
+`USD`（默认）或 `CNY`，跟随各模型官方定价页，**不做汇率换算**，成本按各行币种数值直接累计；
+`input_price` 为未命中缓存的输入价，`cache_read_price` 为缓存命中输入价，
+留空/0 时自动按输入价 1/10 计（OpenAI 口径），缓存写固定按输入价 1.25 倍计）：
 
 ```bash
 curl -X PUT http://127.0.0.1:8080/api/admin/prices \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{"model":"gpt-4o","input_price":2.5,"output_price":10,"currency":"USD"}'
+  -d '{"model":"gpt-4o","input_price":2.5,"cache_read_price":0.25,"output_price":10,"currency":"USD"}'
 ```
 
 价格匹配先精确、再退回最长的段边界前缀：`gpt-4o` 会覆盖 `gpt-4o-2024-08-06`，
@@ -117,7 +119,7 @@ DELETE /api/admin/keys/{id}
 GET    /api/admin/logs?limit=100        请求日志（支持 limit/offset/channel_id/api_key_id/
                                         model/status=ok|error/since/until 过滤分页，返回 {items,total}）
 GET    /api/admin/prices                模型价格列表
-PUT    /api/admin/prices                设置价格 {model, input_price, output_price, currency:"USD"|"CNY"}
+PUT    /api/admin/prices                设置价格 {model, input_price, output_price, cache_read_price?, currency:"USD"|"CNY"}
 DELETE /api/admin/prices/{model...}     删除价格
 ```
 

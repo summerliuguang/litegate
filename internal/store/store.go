@@ -77,11 +77,12 @@ CREATE TABLE IF NOT EXISTS api_keys (
 CREATE INDEX IF NOT EXISTS idx_logs_ts ON request_logs(ts);
 CREATE INDEX IF NOT EXISTS idx_logs_channel ON request_logs(channel_id);
 CREATE TABLE IF NOT EXISTS model_prices (
-	model        TEXT PRIMARY KEY,
-	input_price  REAL NOT NULL DEFAULT 0,
-	output_price REAL NOT NULL DEFAULT 0,
-	currency     TEXT NOT NULL DEFAULT 'USD',
-	updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+	model            TEXT PRIMARY KEY,
+	input_price      REAL NOT NULL DEFAULT 0,
+	output_price     REAL NOT NULL DEFAULT 0,
+	cache_read_price REAL NOT NULL DEFAULT 0,
+	currency         TEXT NOT NULL DEFAULT 'USD',
+	updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 `
 
@@ -157,6 +158,7 @@ func migrate(db *sql.DB) error {
 		{"api_keys", "budget_period", `ALTER TABLE api_keys ADD COLUMN budget_period TEXT NOT NULL DEFAULT 'daily'`},
 		{"api_keys", "budget_tokens", `ALTER TABLE api_keys ADD COLUMN budget_tokens INTEGER NOT NULL DEFAULT 0`},
 		{"model_prices", "currency", `ALTER TABLE model_prices ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD'`},
+		{"model_prices", "cache_read_price", `ALTER TABLE model_prices ADD COLUMN cache_read_price REAL NOT NULL DEFAULT 0`},
 	} {
 		if !have[m.table+"."+m.col] {
 			if _, err := db.Exec(m.ddl); err != nil {
