@@ -30,11 +30,12 @@ async function api(path, opts = {}) {
 
 // 侧边栏 + 手机折叠菜单（data-page 标记当前页）
 const NAV_ITEMS = [
-  { id: 'dashboard', href: '/',            icon: '', label: '仪表盘' },
-  { id: 'channels',  href: '/channels.html', icon: '', label: '渠道管理' },
-  { id: 'keys',      href: '/keys.html',     icon: '', label: '虚拟密钥' },
-  { id: 'logs',      href: '/logs.html',     icon: '', label: '请求日志' },
-  { id: 'prices',    href: '/prices.html',   icon: '', label: '模型价格' },
+  { id: 'dashboard',  href: '/',                 icon: '', label: '仪表盘' },
+  { id: 'channels',   href: '/channels.html',    icon: '', label: '渠道管理' },
+  { id: 'keys',       href: '/keys.html',        icon: '', label: '虚拟密钥' },
+  { id: 'logs',       href: '/logs.html',        icon: '', label: '请求日志' },
+  { id: 'prices',     href: '/prices.html',      icon: '', label: '模型价格' },
+  { id: 'playground', href: '/playground.html',  icon: '', label: '对话测试' },
 ];
 
 function renderNav() {

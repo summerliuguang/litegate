@@ -8,6 +8,7 @@
 - 下游协议：OpenAI（`/v1/chat/completions`、`/v1/embeddings`、`/v1/responses`）、Anthropic（`/v1/messages`、`/v1/messages/count_tokens`，Claude Code 可直连）；Responses 桥接到 chat 渠道，Codex 等原生 Responses 客户端可用
 - 上游渠道：OpenAI 兼容 / Anthropic 兼容，**单渠道多密钥**加权轮询、坏 key 自动冷却换下一把、后台巡检自动恢复；按优先级故障转移；模型映射（对外别名 → 上游真实名）
 - 虚拟密钥治理：模型白名单（下拉勾选式配置）、RPM/TPM 限速、日/月预算（美元或 token，超限 429）、过期时间
+- 管理台对话测试：playground 页选启用模型直接对话（流式输出、思维链折叠展示、用量元信息），进程内复用数据面链路，日志按 `X-LiteGate-App: playground` 归因
 - 用量统计：请求级 Token 计量（含 prompt caching 缓存 token，读按 1/10 价计费）、成本核算（模型价格可配）、按虚拟密钥的输出速度统计（近 7 天加权平均 + 日志逐条 tok/s）、日志过滤分页、用量看板（今日/近 7 天/按渠道/按模型/按应用）
 - 内嵌管理页面与管理 API：渠道 CRUD、连通性测试、虚拟密钥、请求日志、用量看板；管理页适配手机端（表格自动转卡片式布局，统计卡两列）
 
@@ -121,6 +122,8 @@ GET    /api/admin/logs?limit=100        请求日志（支持 limit/offset/chann
 GET    /api/admin/prices                模型价格列表
 PUT    /api/admin/prices                设置价格 {model, input_price, output_price, cache_read_price?, currency:"USD"|"CNY"}
 DELETE /api/admin/prices/{model...}     删除价格
+GET    /api/admin/playground/models     对话测试：启用模型列表
+POST   /api/admin/playground/chat       对话测试：{model, messages} 流式回传（管理会话鉴权，走数据面全链路）
 ```
 
 数据面：

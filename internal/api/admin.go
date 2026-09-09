@@ -54,6 +54,7 @@ func (a *admin) register(mux *http.ServeMux) {
 	mux.Handle("GET /api/admin/prices", a.auth(a.listPrices))
 	mux.Handle("PUT /api/admin/prices", a.auth(a.upsertPrice))
 	mux.Handle("DELETE /api/admin/prices/{model...}", a.auth(a.deletePrice))
+	a.registerPlayground(mux)
 }
 
 func (a *admin) auth(next http.HandlerFunc) http.Handler {

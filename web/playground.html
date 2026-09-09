@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>对话测试 - LiteGate</title>
+<link rel="stylesheet" href="/static/vendor/bulma.min.css">
+<link rel="stylesheet" href="/static/skin.css">
+<link rel="stylesheet" href="/static/admin.css">
+<style>
+  #chatLog{height:56vh;overflow-y:auto;background:var(--card,#fff);border:1px solid var(--line,#e8eaf0);
+    border-radius:12px;padding:.9rem;display:flex;flex-direction:column;gap:.7rem}
+  .msg{max-width:82%;padding:.5rem .75rem;border-radius:12px;font-size:.85rem;white-space:pre-wrap;
+    overflow-wrap:anywhere;line-height:1.55}
+  .msg.user{align-self:flex-end;background:#eef3ff;border:1px solid #d5e0fb}
+  .msg.assistant{align-self:flex-start;background:#f7f8fa;border:1px solid var(--line,#e8eaf0)}
+  .msg details.reasoning{color:#9898ac;font-size:.75rem;border-left:3px solid #e3e3ee;
+    padding-left:.5rem;margin:0 0 .4rem}
+  .msg details.reasoning summary{cursor:pointer;user-select:none;font-weight:600}
+  .msg .reasoning-body{white-space:pre-wrap;margin-top:.25rem}
+  .msg .meta{color:#b0b0c2;font-size:.7rem;margin-top:.35rem}
+  .msg.err{background:#fff5f5;border:1px solid #f5c6c6;color:#c0392b}
+  #composer{display:flex;gap:.5rem;align-items:flex-end;margin-top:.8rem}
+  #fInput{flex:1;resize:vertical;min-height:2.6rem;max-height:9rem}
+  @media (max-width:768px){ #chatLog{height:48vh} .msg{max-width:92%} }
+</style>
+</head>
+<body data-page="playground">
+<div class="wrap">
+  <h1 class="title is-4" style="margin:0 0 .3rem">对话测试</h1>
+  <p class="is-size-7 has-text-grey" style="margin-bottom:1rem">
+    走网关真实数据面（渠道选择 / 限流预算 / 日志成本照常记录，应用标记为 <code>playground</code>）。
+    调用使用第一把可用的启用虚拟密钥。
+  </p>
+
+  <div class="card" style="margin-bottom:1rem">
+    <div class="card-content" style="padding:.9rem">
+      <div class="columns is-multiline is-variable is-2" style="margin:0">
+        <div class="column is-half pb-0">
+          <label class="label is-size-7">模型</label>
+          <div class="select is-small is-fullwidth">
+            <select id="fModel"><option>加载中…</option></select>
+          </div>
+        </div>
+        <div class="column is-half pb-0">
+          <label class="label is-size-7">系统提示（可选，仅对本次对话生效）</label>
+          <input class="input is-small" id="fSystem" placeholder="例如：你是一个简洁的助手">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="chatLog"><div class="has-text-grey is-size-7" style="margin:auto">选个模型，发一句话试试</div></div>
+
+  <div id="composer">
+    <textarea id="fInput" class="input is-small" rows="1"
+      placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
+    <button class="button is-link is-small" id="btnSend">发送</button>
+    <button class="button is-danger is-light is-small" id="btnStop" style="display:none">停止</button>
+    <button class="button is-small" id="btnClear">清空对话</button>
+  </div>
+</div>
+<script src="/static/common.js"></script>
+<script>
+'use strict';
+renderNav();
+
+const chatLog = document.getElementById('chatLog');
+const fModel = document.getElementById('fModel');
+const fSystem = document.getElementById('fSystem');
+const fInput = document.getElementById('fInput');
+const btnSend = document.getElementById('btnSend');
+const btnStop = document.getElementById('btnStop');
+const btnClear = document.getElementById('btnClear');
+
+let messages = [];   // {role, content}，不含 system 与流式中的临时内容
+let busy = false;
+let ctrl = null;
+
+async function loadModels() {
+  try {
+    const d = await api('/api/admin/playground/models');
+    fModel.innerHTML = (d.models || []).map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('')
+      || '<option value="">（暂无启用模型）</option>';
+  } catch (ex) { toast('模型列表加载失败：' + ex.message, false); }
+}
+
+function bubble(cls, text) {
+  const el = document.createElement('div');
+  el.className = 'msg ' + cls;
+  el.textContent = text || '';
+  chatLog.appendChild(el);
+  chatLog.scrollTop = chatLog.scrollHeight;
+  return el;
+}
+
+function renderStream(el, reasoning, acc) {
+  // 思考过程做成 <details> 折叠块：思考中保持展开，正文开始输出时自动折叠
+  // 一次（data-rc 标记，之后由用户手动开合）；增量更新，不重建节点，保留用户折叠状态。
+  let det = el.querySelector('details.reasoning');
+  if (reasoning) {
+    if (!det) {
+      det = document.createElement('details');
+      det.className = 'reasoning';
+      det.open = true;
+      const sum = document.createElement('summary');
+      sum.textContent = '思考过程';
+      const body = document.createElement('div');
+      body.className = 'reasoning-body';
+      det.appendChild(sum);
+      det.appendChild(body);
+      el.appendChild(det);
+    }
+    det.querySelector('.reasoning-body').textContent = reasoning;
+    if (acc && !el.dataset.rc) {
+      det.open = false;
+      el.dataset.rc = '1';
+    }
+  }
+  let ans = el.querySelector('span.answer');
+  if (!ans) {
+    ans = document.createElement('span');
+    ans.className = 'answer';
+    el.appendChild(ans);
+  }
+  ans.textContent = acc || (reasoning ? '' : '…');
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+function setUI() {
+  btnSend.disabled = busy;
+  btnStop.style.display = busy ? '' : 'none';
+}
+
+async function send() {
+  const text = fInput.value.trim();
+  if (!text || busy) return;
+  if (!fModel.value) { toast('没有可用的模型', false); return; }
+  fInput.value = '';
+  messages.push({ role: 'user', content: text });
+  bubble('user', text);
+  busy = true; setUI();
+
+  const asst = bubble('assistant', '…');
+  const msgs = [];
+  const sys = fSystem.value.trim();
+  if (sys) msgs.push({ role: 'system', content: sys });
+  msgs.push(...messages);
+
+  let acc = '', reasoning = '', usage = null;
+  ctrl = new AbortController();
+  try {
+    const resp = await fetch('/api/admin/playground/chat', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + getToken(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: fModel.value, messages: msgs }),
+      signal: ctrl.signal,
+    });
+    if (resp.status === 401) { clearToken(); location.href = '/login.html'; return; }
+    if (!resp.ok) {
+      let d = null; try { d = await resp.json(); } catch (_) {}
+      throw new Error((d && d.error) || ('HTTP ' + resp.status));
+    }
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        const s = line.trim();
+        if (!s.startsWith('data:')) continue;
+        const payload = s.slice(5).trim();
+        if (payload === '[DONE]') continue;
+        try {
+          const j = JSON.parse(payload);
+          if (j.usage) usage = j.usage;
+          const d = j.choices && j.choices[0] && (j.choices[0].delta || {});
+          if (d.reasoning_content) reasoning += d.reasoning_content;
+          if (d.content) acc += d.content;
+        } catch (_) { /* 非 JSON 行忽略 */ }
+      }
+      renderStream(asst, reasoning, acc);
+    }
+    messages.push({ role: 'assistant', content: acc });
+    renderStream(asst, reasoning, acc);
+    if (usage) {
+      const m = document.createElement('div');
+      m.className = 'meta';
+      m.textContent = `输入 ${usage.prompt_tokens || 0} tok · 输出 ${usage.completion_tokens || 0} tok`
+        + (usage.cache_tokens ? ` · 缓存命中 ${usage.cache_tokens} tok` : '');
+      asst.appendChild(m);
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+  } catch (ex) {
+    if (ex.name === 'AbortError') {
+      if (acc) messages.push({ role: 'assistant', content: acc });
+      renderStream(asst, reasoning, acc + '\n（已停止）');
+    } else {
+      asst.classList.add('err');
+      asst.textContent = '调用失败：' + ex.message;
+    }
+  } finally {
+    busy = false; ctrl = null; setUI(); fInput.focus();
+  }
+}
+
+btnSend.addEventListener('click', send);
+btnStop.addEventListener('click', () => ctrl && ctrl.abort());
+btnClear.addEventListener('click', () => {
+  if (busy) ctrl && ctrl.abort();
+  messages = [];
+  chatLog.innerHTML = '<div class="has-text-grey is-size-7" style="margin:auto">选个模型，发一句话试试</div>';
+});
+fInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
+loadModels();
+fInput.focus();
+</script>
+</body>
+</html>
