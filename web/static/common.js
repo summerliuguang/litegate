@@ -75,8 +75,30 @@ function renderNav() {
 // 格式化辅助
 function fmtInt(n) { return Number(n || 0).toLocaleString('zh-CN'); }
 function fmtUSD(n) {
+  return fmtCur(n, 'USD');
+}
+
+// 按币种格式化金额：USD→$、CNY→¥，其余用代码原样标注
+function fmtCur(n, cur) {
   n = Number(n || 0);
-  return n >= 100 ? ('$' + n.toFixed(1)) : n >= 1 ? ('$' + n.toFixed(2)) : ('$' + n.toFixed(4));
+  const s = cur === 'CNY' ? '¥' : cur === 'USD' ? '$' : (cur || '');
+  return n >= 100 ? (s + n.toFixed(1)) : n >= 1 ? (s + n.toFixed(2)) : (s + n.toFixed(4));
+}
+
+// 成本聚合可能是「按币种拆分」对象（跨模型数值不可互加），渲染成 "¥x + $y"；
+// 兼容旧的单一数值（按美元显示）
+function fmtCost(v) {
+  if (v && typeof v === 'object') {
+    const parts = [];
+    for (const cur of ['CNY', 'USD']) {
+      if (v[cur]) parts.push(fmtCur(v[cur], cur));
+    }
+    for (const cur of Object.keys(v)) {
+      if (cur !== 'CNY' && cur !== 'USD' && v[cur]) parts.push(fmtCur(v[cur], cur));
+    }
+    return parts.length ? parts.join(' + ') : '$0';
+  }
+  return fmtUSD(v);
 }
 function fmtTok(n) {
   n = Number(n || 0);

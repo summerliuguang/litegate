@@ -27,7 +27,7 @@
     <div class="card"><div class="card-content has-text-centered">
       <p class="heading">今日成本</p>
       <p class="stat-num" id="vCost">--</p>
-      <p class="has-text-grey is-size-7">美元（按价格表核算）</p>
+      <p class="has-text-grey is-size-7">按价格表币种核算（¥/$ 不互加）</p>
     </div></div>
     <div class="card"><div class="card-content has-text-centered">
       <p class="heading">渠道 / 密钥</p>
@@ -109,7 +109,7 @@ renderNav();
 function usageRow(u) {
   return `<tr><td class="mono cell-col" data-label="名称">${esc(u.model || u.channel_name || '(已删除渠道)')}</td>` +
     `<td data-label="请求">${fmtInt(u.requests)}</td><td data-label="Tokens">${fmtTok(Number(u.prompt_tokens) + Number(u.completion_tokens))}</td>` +
-    `<td data-label="成本">${fmtUSD(u.cost_usd)}</td></tr>`;
+    `<td data-label="成本">${fmtCost(u.cost_by_currency || u.cost_usd)}</td></tr>`;
 }
 
 async function load() {
@@ -120,7 +120,7 @@ async function load() {
     const tok = Number(d.today_prompt_tokens) + Number(d.today_completion_tokens);
     document.getElementById('vTok').textContent = fmtTok(tok);
     document.getElementById('vTokDetail').textContent = `输入 ${fmtTok(d.today_prompt_tokens)} / 输出 ${fmtTok(d.today_completion_tokens)}`;
-    document.getElementById('vCost').textContent = fmtUSD(d.today_cost_usd);
+    document.getElementById('vCost').textContent = fmtCost(d.today_cost_by_currency || d.today_cost_usd);
     document.getElementById('vCh').textContent = `${d.channels_enabled}/${d.channels}`;
     document.getElementById('vKey').textContent = `密钥 ${d.keys} 个`;
 
@@ -131,7 +131,7 @@ async function load() {
       const w = Math.round(100 * x.requests / max);
       return `<div class="bar-row"><span class="bar-day">${esc(x.day)}</span>` +
         `<div class="bar-track"><div class="bar-fill" style="width:${w}%"></div></div>` +
-        `<span class="bar-val">${fmtInt(x.requests)} 次 · ${fmtUSD(x.cost_usd)}</span></div>`;
+        `<span class="bar-val">${fmtInt(x.requests)} 次 · ${fmtCost(x.cost_by_currency || x.cost_usd)}</span></div>`;
     }).join('') : '<p class="has-text-grey is-size-7">暂无数据</p>';
 
     const bm = d.by_model || [], bc = d.by_channel || [];
@@ -165,7 +165,7 @@ async function load() {
       document.getElementById('byApp').innerHTML = apps.map(a =>
         `<tr><td class="mono cell-col" data-label="应用">${esc(a.app)}</td><td data-label="请求">${fmtInt(a.requests)}</td>` +
         `<td data-label="输入">${fmtTok(a.prompt_tokens)}</td><td data-label="输出">${fmtTok(a.completion_tokens)}</td>` +
-        `<td data-label="成本">${fmtUSD(a.cost_usd)}</td></tr>`).join('');
+        `<td data-label="成本">${fmtCost(a.cost_by_currency || a.cost_usd)}</td></tr>`).join('');
     } else {
       card.style.display = 'none';
     }

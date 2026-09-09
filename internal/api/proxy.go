@@ -492,7 +492,7 @@ func (p *proxy) logRequest(ak *store.APIKey, c *store.Channel, protocol, model s
 	if u.prompt > 0 || u.completion > 0 {
 		price = p.lookupPrice(model)
 	}
-	cost := store.CostOf(price, u.prompt, u.cacheRead, u.cacheWrite, u.completion)
+	cost := store.CostOf(price, time.Now(), u.prompt, u.cacheRead, u.cacheWrite, u.completion)
 	p.limits.record(ak, u.prompt, u.completion, cost)
 	l := &store.RequestLog{
 		Model: model, Protocol: protocol, App: app, Status: status,

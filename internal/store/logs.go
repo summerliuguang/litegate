@@ -21,6 +21,8 @@ type RequestLog struct {
 	CacheTokens      int64   `json:"cache_tokens"`
 	CostUSD          float64 `json:"cost_usd"`
 	Error            string  `json:"error"`
+	// Currency 由查询侧按价格表回填（该模型价格的币种），不落库。
+	Currency string `json:"currency,omitempty"`
 }
 
 func (s *Store) InsertRequestLog(l *RequestLog) error {

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"litegate/internal/store"
 )
@@ -116,32 +117,52 @@ func TestMatchPrice(t *testing.T) {
 }
 
 func TestCostOf(t *testing.T) {
-	if store.CostOf(nil, 1000, 0, 0, 1000) != 0 {
+	now := time.Now()
+	if store.CostOf(nil, now, 1000, 0, 0, 1000) != 0 {
 		t.Fatal("nil price should cost 0")
 	}
 	p := &store.ModelPrice{InputPrice: 2, OutputPrice: 4}
-	if got := store.CostOf(p, 1_000_000, 0, 0, 500_000); got != 4 {
+	if got := store.CostOf(p, now, 1_000_000, 0, 0, 500_000); got != 4 {
 		t.Fatalf("cost = %v, want 4", got)
 	}
 	// 3 个 prompt token × 0.5 美元/百万 = 0.0000015，四舍五入到 6 位小数
 	p2 := &store.ModelPrice{InputPrice: 0.5}
-	if got := store.CostOf(p2, 3, 0, 0, 0); math.Abs(got-0.000002) > 1e-9 {
+	if got := store.CostOf(p2, now, 3, 0, 0, 0); math.Abs(got-0.000002) > 1e-9 {
 		t.Fatalf("cost rounding = %v", got)
 	}
 	// 缓存读按 1/10 价：100 万输入（其中 60 万命中缓存）× 2 美元
 	// = 40 万×2/1e6 + 60 万×0.2/1e6 = 0.8 + 0.12 = 0.92
-	if got := store.CostOf(p, 1_000_000, 600_000, 0, 0); math.Abs(got-0.92) > 1e-9 {
+	if got := store.CostOf(p, now, 1_000_000, 600_000, 0, 0); math.Abs(got-0.92) > 1e-9 {
 		t.Fatalf("cached cost = %v, want 0.92", got)
 	}
 	// 缓存写按 1.25 倍价：100 万总输入（其中 20 万缓存写）× 2 美元
 	// = 80 万×2/1e6 + 20 万×2.5/1e6 = 1.6 + 0.5 = 2.1
-	if got := store.CostOf(p, 1_000_000, 0, 200_000, 0); math.Abs(got-2.1) > 1e-9 {
+	if got := store.CostOf(p, now, 1_000_000, 0, 200_000, 0); math.Abs(got-2.1) > 1e-9 {
 		t.Fatalf("cache-write cost = %v, want 2.1", got)
 	}
 	// 显式缓存命中价优先于 1/10 自动折算：60 万命中×0.1 + 40 万未命中×2 = 0.86
 	pc := &store.ModelPrice{InputPrice: 2, OutputPrice: 4, CacheReadPrice: 0.1}
-	if got := store.CostOf(pc, 1_000_000, 600_000, 0, 0); math.Abs(got-0.86) > 1e-9 {
+	if got := store.CostOf(pc, now, 1_000_000, 600_000, 0, 0); math.Abs(got-0.86) > 1e-9 {
 		t.Fatalf("explicit cache-read cost = %v, want 0.86", got)
+	}
+	// 空闲时段折扣：北京时间周一 10:00 高峰全价，周一 20:00 空闲按 0.5 折
+	// （固定 UTC 时刻：02:00 = 北京 10:00 高峰；12:00 = 北京 20:00 空闲；2026-01-05 为周一）
+	cst := time.FixedZone("CST", 8*3600)
+	peakAt := time.Date(2026, 1, 5, 10, 0, 0, 0, cst)
+	offAt := time.Date(2026, 1, 5, 20, 0, 0, 0, cst)
+	pd := &store.ModelPrice{InputPrice: 3, OutputPrice: 9, OffpeakRatio: 0.5}
+	// 高峰：100 万未命中输入 + 100 万输出 = 3 + 9 = 12
+	if got := store.CostOf(pd, peakAt, 1_000_000, 0, 0, 1_000_000); math.Abs(got-12) > 1e-9 {
+		t.Fatalf("peak cost = %v, want 12", got)
+	}
+	// 空闲：半价 = 1.5 + 4.5 = 6
+	if got := store.CostOf(pd, offAt, 1_000_000, 0, 0, 1_000_000); math.Abs(got-6) > 1e-9 {
+		t.Fatalf("offpeak cost = %v, want 6", got)
+	}
+	// 周末全天空闲：2026-01-10 为周六
+	weekend := time.Date(2026, 1, 10, 10, 0, 0, 0, cst)
+	if got := store.CostOf(pd, weekend, 1_000_000, 0, 0, 1_000_000); math.Abs(got-6) > 1e-9 {
+		t.Fatalf("weekend cost = %v, want 6", got)
 	}
 }
 

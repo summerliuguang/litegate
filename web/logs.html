@@ -131,7 +131,7 @@ async function load() {
         <td data-label="输入">${fmtInt(l.prompt_tokens)}</td>
         <td data-label="输出">${fmtInt(l.completion_tokens)}</td>
         <td data-label="输出速度" class="mono">${tps}</td>
-        <td data-label="成本">${fmtUSD(l.cost_usd)}</td>
+        <td data-label="成本">${fmtCur(l.cost_usd, l.currency || 'USD')}</td>
         <td data-label="渠道/密钥" class="has-text-grey">${esc(chName)} / ${esc(keyName)}</td>
       </tr>`;
     }).join('');

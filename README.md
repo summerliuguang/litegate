@@ -70,13 +70,17 @@ curl -X POST http://127.0.0.1:8080/api/admin/channels \
 给模型配价格后即可自动核算成本（单位：/ 百万 token；`currency` 可选标注币种
 `USD`（默认）或 `CNY`，跟随各模型官方定价页，**不做汇率换算**，成本按各行币种数值直接累计；
 `input_price` 为未命中缓存的输入价，`cache_read_price` 为缓存命中输入价，
-留空/0 时自动按输入价 1/10 计（OpenAI 口径），缓存写固定按输入价 1.25 倍计）：
+留空/0 时自动按输入价 1/10 计（OpenAI 口径），缓存写固定按输入价 1.25 倍计；
+`offpeak_ratio` 为空闲时段折扣（DeepSeek 口径，存储价为高峰全价，北京时间周一至周五
+9-12/14-18 全价、其余时段按折扣计，缺省 1 不分时段）：
 
 ```bash
 curl -X PUT http://127.0.0.1:8080/api/admin/prices \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{"model":"gpt-4o","input_price":2.5,"cache_read_price":0.25,"output_price":10,"currency":"USD"}'
+  -d '{"model":"deepseek-v4-flash","input_price":3,"cache_read_price":0.1,"output_price":9,"currency":"CNY","offpeak_ratio":0.5}'
 ```
+
+仪表盘与日志的成本展示跟随价格表币种（¥/$），跨模型聚合按 `¥x + $y` 拆分显示、不互加。
 
 价格匹配先精确、再退回最长的段边界前缀：`gpt-4o` 会覆盖 `gpt-4o-2024-08-06`，
 但 `gpt-4` 不会匹配 `gpt-4o`。

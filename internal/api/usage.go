@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"strings"
 
 	"litegate/internal/store"
 )
@@ -164,25 +163,7 @@ func injectStreamUsage(body []byte) ([]byte, bool) {
 	return out, true
 }
 
-// matchPrice 在价格表里找模型单价：先精确匹配，再退回最长的段边界前缀，
-// 如 "gpt-4o" 覆盖 "gpt-4o-2024-08-06"；"gpt-4" 不会匹配 "gpt-4o"。
+// matchPrice 在价格表里找模型单价，规则见 store.MatchPrice。
 func matchPrice(prices []store.ModelPrice, model string) *store.ModelPrice {
-	if model == "" {
-		return nil
-	}
-	var best *store.ModelPrice
-	for i := range prices {
-		p := &prices[i]
-		if p.Model == model {
-			return p
-		}
-		if strings.HasPrefix(model, p.Model+"-") ||
-			strings.HasPrefix(model, p.Model+".") ||
-			strings.HasPrefix(model, p.Model+"/") {
-			if best == nil || len(p.Model) > len(best.Model) {
-				best = p
-			}
-		}
-	}
-	return best
+	return store.MatchPrice(prices, model)
 }

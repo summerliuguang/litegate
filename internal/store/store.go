@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS model_prices (
 	output_price     REAL NOT NULL DEFAULT 0,
 	cache_read_price REAL NOT NULL DEFAULT 0,
 	currency         TEXT NOT NULL DEFAULT 'USD',
+	offpeak_ratio    REAL NOT NULL DEFAULT 1,
 	updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 `
@@ -159,6 +160,7 @@ func migrate(db *sql.DB) error {
 		{"api_keys", "budget_tokens", `ALTER TABLE api_keys ADD COLUMN budget_tokens INTEGER NOT NULL DEFAULT 0`},
 		{"model_prices", "currency", `ALTER TABLE model_prices ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD'`},
 		{"model_prices", "cache_read_price", `ALTER TABLE model_prices ADD COLUMN cache_read_price REAL NOT NULL DEFAULT 0`},
+		{"model_prices", "offpeak_ratio", `ALTER TABLE model_prices ADD COLUMN offpeak_ratio REAL NOT NULL DEFAULT 1`},
 	} {
 		if !have[m.table+"."+m.col] {
 			if _, err := db.Exec(m.ddl); err != nil {

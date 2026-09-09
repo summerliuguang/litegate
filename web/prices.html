@@ -14,6 +14,7 @@
   <p class="is-size-7 has-text-grey" style="margin-bottom:1rem">
     单位：/ 百万 token，币种跟随各模型官方定价页（<b>$</b> 美元 / <b>¥</b> 人民币），不做汇率换算；
     成本按各行币种数值直接累计。缓存命中价留空时自动按输入（未命中）价 1/10 计。
+    配置空闲折扣（如 DeepSeek 的 0.5）时，存储价视为高峰全价，北京时间周一至周五 9-12/14-18 之外按折扣计。
     未配置价格的模型不计成本（记 0）。
     价格匹配先精确、再最长前缀：<code>gpt-4o</code> 覆盖 <code>gpt-4o-2024-08-06</code>。
   </p>
@@ -40,6 +41,8 @@
           <input class="input is-small" id="fCache" type="number" min="0" step="any" placeholder="留空=自动 1/10"></div>
         <div class="column"><label class="label is-size-7">输出 /M</label>
           <input class="input is-small" id="fOut" type="number" min="0" step="any" placeholder="10" required></div>
+        <div class="column is-narrow"><label class="label is-size-7">空闲折扣</label>
+          <input class="input is-small" id="fOff" type="number" min="0" max="1" step="any" placeholder="1=不分时段" style="width:8.5rem"></div>
         <div class="column is-narrow" style="display:flex;align-items:flex-end">
           <button class="button is-link is-small" type="submit">保存（新建或覆盖）</button>
         </div>
@@ -49,8 +52,8 @@
 
   <div class="table-container card">
     <table class="table is-fullwidth is-size-7 mobile-cards" style="border-radius:12px">
-      <thead><tr><th>模型</th><th>输入(未命中) /M</th><th>输入(命中) /M</th><th>输出 /M</th><th>更新时间</th><th style="min-width:90px">操作</th></tr></thead>
-      <tbody id="rows"><tr><td colspan="6" class="has-text-grey">加载中…</td></tr></tbody>
+      <thead><tr><th>模型</th><th>输入(未命中) /M</th><th>输入(命中) /M</th><th>输出 /M</th><th>空闲折扣</th><th>更新时间</th><th style="min-width:90px">操作</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="7" class="has-text-grey">加载中…</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -70,17 +73,19 @@ async function load() {
     const prices = await api('/api/admin/prices');
     const tb = document.getElementById('rows');
     if (!prices.length) {
-      tb.innerHTML = '<tr><td colspan="6" class="has-text-grey">还没有价格配置，用上方表单添加</td></tr>';
+      tb.innerHTML = '<tr><td colspan="7" class="has-text-grey">还没有价格配置，用上方表单添加</td></tr>';
       return;
     }
     tb.innerHTML = prices.map(p => {
       const s = curSym(p.currency);
       const hit = p.cache_read_price > 0 ? `${s}${p.cache_read_price}` : `自动（${s}${(p.input_price * 0.1).toFixed(2).replace(/\.?0+$/, '')}）`;
+      const off = p.offpeak_ratio && p.offpeak_ratio < 1 ? `×${p.offpeak_ratio}` : '—';
       return `<tr>
       <td data-label="模型" class="mono cell-col"><b>${esc(p.model)}</b></td>
       <td data-label="输入(未命中) /M">${s}${p.input_price}</td>
       <td data-label="输入(命中) /M">${hit}</td>
       <td data-label="输出 /M">${s}${p.output_price}</td>
+      <td data-label="空闲折扣">${esc(off)}</td>
       <td data-label="更新时间" class="mono">${fmtTs(p.updated_at)}</td>
       <td data-label="操作"><button class="button is-small is-danger is-light" onclick="delPrice('${esc(p.model)}')">删除</button></td>
     </tr>`;
@@ -96,6 +101,7 @@ document.getElementById('formUp').addEventListener('submit', async e => {
     input_price: parseFloat(document.getElementById('fIn').value),
     cache_read_price: parseFloat(document.getElementById('fCache').value) || 0,
     output_price: parseFloat(document.getElementById('fOut').value),
+    offpeak_ratio: parseFloat(document.getElementById('fOff').value) || 0,
   };
   if (!body.model || isNaN(body.input_price) || isNaN(body.output_price)) return;
   try {

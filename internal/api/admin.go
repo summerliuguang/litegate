@@ -593,6 +593,14 @@ func (a *admin) listLogs(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// 按价格表回填每行的成本币种，前端据此显示 ¥/$ 而不是硬编码美元
+	if prices, err := a.st.ListModelPrices(); err == nil {
+		for i := range page.Items {
+			if p := store.MatchPrice(prices, page.Items[i].Model); p != nil {
+				page.Items[i].Currency = p.Currency
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, page)
 }
 
@@ -600,12 +608,14 @@ func (a *admin) listLogs(w http.ResponseWriter, r *http.Request) {
 
 // priceIn 的 currency 为可选标注字段（"USD"|"CNY"），缺省 USD；不做汇率换算。
 // cache_read_price 为缓存命中输入价，0 表示自动按输入价 1/10。
+// offpeak_ratio 为空闲时段折扣（0<r<=1，0/缺省=1 不分时段），存储价始终为高峰全价。
 type priceIn struct {
 	Model          string  `json:"model"`
 	InputPrice     float64 `json:"input_price"`
 	OutputPrice    float64 `json:"output_price"`
 	CacheReadPrice float64 `json:"cache_read_price"`
 	Currency       string  `json:"currency"`
+	OffpeakRatio   float64 `json:"offpeak_ratio"`
 }
 
 var priceCurrencies = map[string]bool{"USD": true, "CNY": true}
@@ -629,14 +639,18 @@ func (a *admin) upsertPrice(w http.ResponseWriter, r *http.Request) {
 	if in.Currency == "" {
 		in.Currency = "USD"
 	}
-	if in.Model == "" || in.InputPrice < 0 || in.OutputPrice < 0 || in.CacheReadPrice < 0 || !priceCurrencies[in.Currency] {
+	if in.OffpeakRatio <= 0 {
+		in.OffpeakRatio = 1
+	}
+	if in.Model == "" || in.InputPrice < 0 || in.OutputPrice < 0 || in.CacheReadPrice < 0 ||
+		in.OffpeakRatio > 1 || !priceCurrencies[in.Currency] {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "model is required, prices must be non-negative and currency must be USD or CNY"})
+			"error": "model is required, prices must be non-negative, offpeak_ratio must be in (0,1] and currency must be USD or CNY"})
 		return
 	}
 	p := &store.ModelPrice{
 		Model: in.Model, InputPrice: in.InputPrice, OutputPrice: in.OutputPrice,
-		CacheReadPrice: in.CacheReadPrice, Currency: in.Currency,
+		CacheReadPrice: in.CacheReadPrice, Currency: in.Currency, OffpeakRatio: in.OffpeakRatio,
 	}
 	if err := a.st.UpsertModelPrice(p); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
