@@ -129,6 +129,49 @@ func (f LogFilter) where() (string, []any) {
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
+// LogSummary 是按模型聚合的请求摘要(日志钻取第一层:模型卡片)。
+type LogSummary struct {
+	Model            string  `json:"model"`
+	Requests         int64   `json:"requests"`
+	Errors           int64   `json:"errors"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	CacheTokens      int64   `json:"cache_tokens"`
+	Cost             float64 `json:"cost"`
+	Currency         string  `json:"currency,omitempty"`
+	LastTs           string  `json:"last_ts"`
+}
+
+// LogSummaries 按现有过滤条件聚合每个模型的请求摘要(不含未记录模型名的失败请求)。
+func (s *Store) LogSummaries(f LogFilter) ([]LogSummary, error) {
+	where, args := f.where()
+	if where == "" {
+		where = " WHERE model != ''"
+	} else {
+		where += " AND model != ''"
+	}
+	rows, err := s.DB.Query(
+		`SELECT model, COUNT(*), IFNULL(SUM(status >= 400 OR error != ''), 0),
+		        IFNULL(SUM(prompt_tokens), 0), IFNULL(SUM(completion_tokens), 0), IFNULL(SUM(cache_tokens), 0),
+		        IFNULL(ROUND(SUM(cost), 6), 0), MAX(ts)
+		 FROM request_logs`+where+`
+		 GROUP BY model ORDER BY MAX(ts) DESC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []LogSummary{}
+	for rows.Next() {
+		var m LogSummary
+		if err := rows.Scan(&m.Model, &m.Requests, &m.Errors, &m.PromptTokens,
+			&m.CompletionTokens, &m.CacheTokens, &m.Cost, &m.LastTs); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // PruneLogs 删除 days 天前的请求日志，返回删除行数；days <= 0 时不删除。
 // 由调用方按保留策略周期性调用（SQLite 单连接，删除大表时段短暂占用写锁）。
 func (s *Store) PruneLogs(days int) (int64, error) {

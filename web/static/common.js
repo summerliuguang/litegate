@@ -53,17 +53,89 @@ function renderNav() {
       <ul class="menu-list">
         <li><a href="#" id="navLogout">退出登录</a></li>
       </ul>
+      <p class="menu-label">外观</p>
+      <div class="theme-seg" data-theme-seg>
+        <button type="button" data-t="system">跟随系统</button>
+        <button type="button" data-t="light">日间</button>
+        <button type="button" data-t="dark">夜间</button>
+      </div>
     </aside>
     <div class="foot">LiteGate AI 网关<br>数据面与管理共用入口</div>`;
   document.body.prepend(aside);
 
-  const det = document.createElement('details');
-  det.className = 'mnav';
-  det.innerHTML = `<summary>菜单</summary>
-    <ul class="menu-list" style="margin-top:.5rem">${NAV_ITEMS.map(i => link(i, '')).join('')}</ul>`;
-  // 插到 .wrap 之前
-  const wrap = document.querySelector('.wrap');
-  wrap.parentNode.insertBefore(det, wrap);
+  // 移动端固定顶栏：左侧汉堡图标、右侧当前页面名称；点图标菜单从左滑出
+  // （遮罩点击/× 按钮/点任意链接即关闭，逻辑见底部 bindDrawer）
+  const cur = NAV_ITEMS.find(i => i.id === page);
+  const bar = document.createElement('header');
+  bar.className = 'topbar';
+  bar.innerHTML = `
+    <div class="topbar-left">
+      <button class="topbar-icon" aria-label="打开菜单">
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+          <path d="M4 6.5h16"/><path d="M4 12h11"/><path d="M4 17.5h16"/>
+        </svg>
+      </button>
+      <span class="topbar-brand">LiteGate</span>
+    </div>
+    <span class="topbar-left">
+      <button class="theme-quick" id="themeQuick" aria-label="切换日间夜间">🌙</button>
+      <span class="topbar-title">${esc(cur ? cur.label : (document.title.split(' - ')[0] || ''))}</span>
+    </span>`;
+  const backdrop = document.createElement('div');
+  backdrop.className = 'mnav-backdrop';
+  const drawer = document.createElement('aside');
+  drawer.className = 'mnav-drawer';
+  drawer.innerHTML = `
+    <div class="mnav-head">
+      <span class="mnav-logo">LiteGate</span>
+      <button class="mnav-close" aria-label="关闭菜单">×</button>
+    </div>
+    <aside class="menu">
+      <p class="menu-label">管理</p>
+      <ul class="menu-list">${NAV_ITEMS.map(i => link(i, '')).join('')}</ul>
+      <p class="menu-label">其他</p>
+      <ul class="menu-list">
+        <li><a href="#" class="mnav-logout">退出登录</a></li>
+      </ul>
+      <p class="menu-label">外观</p>
+      <div class="theme-seg" data-theme-seg>
+        <button type="button" data-t="system">跟随系统</button>
+        <button type="button" data-t="light">日间</button>
+        <button type="button" data-t="dark">夜间</button>
+      </div>
+    </aside>
+    <div class="foot">LiteGate AI 网关<br>数据面与管理共用入口</div>`;
+  document.body.prepend(bar);
+  document.body.appendChild(backdrop);
+  document.body.appendChild(drawer);
+
+  const setOpen = open => document.body.classList.toggle('mnav-open', open);
+  bar.querySelector('.topbar-icon').addEventListener('click', () => setOpen(true));
+  backdrop.addEventListener('click', () => setOpen(false));
+  drawer.querySelector('.mnav-close').addEventListener('click', () => setOpen(false));
+  drawer.querySelectorAll('.menu-list a').forEach(a => a.addEventListener('click', () => setOpen(false)));
+  drawer.querySelector('.mnav-logout').addEventListener('click', e => {
+    e.preventDefault();
+    clearToken();
+    location.href = '/login.html';
+  });
+
+  // 外观三档(theme.js 提供 siteTheme)+顶栏日/夜快捷切换
+  function syncThemeUI() {
+    const mode = window.siteTheme.get();
+    document.querySelectorAll('[data-theme-seg] button').forEach(b =>
+      b.classList.toggle('on', b.dataset.t === mode));
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const q = document.getElementById('themeQuick');
+    if (q) q.textContent = dark ? '☀️' : '🌙';
+  }
+  document.querySelectorAll('[data-theme-seg] button').forEach(b =>
+    b.addEventListener('click', () => window.siteTheme.set(b.dataset.t)));
+  const tQuick = document.getElementById('themeQuick');
+  if (tQuick) tQuick.addEventListener('click', () => window.siteTheme.quickToggle());
+  document.addEventListener('themechange', syncThemeUI);
+  syncThemeUI();
 
   aside.querySelector('#navLogout').addEventListener('click', e => {
     e.preventDefault();
@@ -102,6 +174,7 @@ function fmtCost(v) {
 }
 function fmtTok(n) {
   n = Number(n || 0);
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
   return String(n);

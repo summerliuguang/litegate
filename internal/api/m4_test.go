@@ -47,9 +47,16 @@ func TestMultiKeyRotationOn401(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	// 坏 key 401 后应自动换到好 key（两把都被试过）
-	if len(seenKeys) < 2 {
-		t.Fatalf("expected key rotation, upstream saw keys: %v", seenKeys)
+	// 坏 key 401 后应自动换到好 key。起点 key 是随机轮转的（均匀分摊）：
+	// 好 key 可能恰好排第一（此时无轮换发生），断言只要求最终经好 key 成功，
+	// 且好 key 之前出现过的都是坏 key。
+	if len(seenKeys) == 0 || seenKeys[len(seenKeys)-1] != "good-key" {
+		t.Fatalf("expected success via good-key, upstream saw keys: %v", seenKeys)
+	}
+	for _, k := range seenKeys[:len(seenKeys)-1] {
+		if k != "bad-key" {
+			t.Fatalf("unexpected key tried before good-key: %v", seenKeys)
+		}
 	}
 }
 

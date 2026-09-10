@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>仪表盘 - LiteGate</title>
 <link rel="stylesheet" href="/static/vendor/bulma.min.css">
+<script src="/static/theme.js"></script>
 <link rel="stylesheet" href="/static/skin.css">
 <link rel="stylesheet" href="/static/admin.css">
 </head>
@@ -107,7 +108,7 @@
 renderNav();
 
 function usageRow(u) {
-  return `<tr><td class="mono cell-col" data-label="名称">${esc(u.model || u.channel_name || '(已删除渠道)')}</td>` +
+  return `<tr><td class="mono cell-col" data-label="名称">${esc(u.model || u.channel_name || '—')}</td>` +
     `<td data-label="请求">${fmtInt(u.requests)}</td><td data-label="Tokens">${fmtTok(Number(u.prompt_tokens) + Number(u.completion_tokens))}</td>` +
     `<td data-label="成本">${fmtCost(u.cost_by_currency || u.cost_usd)}</td></tr>`;
 }

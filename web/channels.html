@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>渠道管理 - LiteGate</title>
 <link rel="stylesheet" href="/static/vendor/bulma.min.css">
+<script src="/static/theme.js"></script>
 <link rel="stylesheet" href="/static/skin.css">
 <link rel="stylesheet" href="/static/admin.css">
 </head>
@@ -20,10 +21,10 @@
   <div class="table-container card">
     <table class="table is-fullwidth is-size-7 mobile-cards" style="border-radius:12px">
       <thead><tr>
-        <th>ID</th><th>名称</th><th>类型</th><th>Base URL</th><th>密钥</th><th>模型</th>
+        <th>ID</th><th>名称</th><th>类型</th><th>Base URL</th><th>模型</th>
         <th>优先级</th><th>权重</th><th>状态</th><th style="min-width:220px">操作</th>
       </tr></thead>
-      <tbody id="rows"><tr><td colspan="10" class="has-text-grey">加载中…</td></tr></tbody>
+      <tbody id="rows"><tr><td colspan="9" class="has-text-grey">加载中…</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -100,7 +101,7 @@ async function load() {
 function renderRows() {
   const tb = document.getElementById('rows');
   if (!channels.length) {
-    tb.innerHTML = '<tr><td colspan="10" class="has-text-grey">还没有渠道，点右上角"新建渠道"添加第一个上游</td></tr>';
+    tb.innerHTML = '<tr><td colspan="9" class="has-text-grey">还没有渠道，点右上角"新建渠道"添加第一个上游</td></tr>';
     return;
   }
   tb.innerHTML = channels.map(c => `<tr>
@@ -108,8 +109,6 @@ function renderRows() {
       <td data-label="名称" class="cell-col"><b>${esc(c.name)}</b>${c.remark ? `<br><span class="has-text-grey is-size-7">${esc(c.remark)}</span>` : ''}</td>
       <td data-label="类型"><span class="tag is-light">${esc(c.type)}</span></td>
       <td data-label="Base URL" class="mono cell-col" style="word-break:break-all">${esc(c.base_url)}</td>
-      <td data-label="密钥" class="mono cell-col" style="word-break:break-all">${(c.api_keys || []).map(k =>
-        `<span class="tag is-light is-size-7" style="margin:0 .2rem .2rem 0${k.enabled ? '' : ';opacity:.45;text-decoration:line-through'}">${esc(k.masked)}</span>`).join('') || '<span class="has-text-grey">无</span>'}</td>
       <td data-label="模型" class="cell-col">${c.models && c.models.length ? esc(c.models.slice(0, 3).join(', ')) + (c.models.length > 3 ? ` 等 ${c.models.length} 个` : '') : '<span class="has-text-grey">任意</span>'}${c.disabled_models && c.disabled_models.length ? `<br><span class="has-text-grey is-size-7">已禁用 ${c.disabled_models.length} 个</span>` : ''}</td>
       <td data-label="优先级">${c.priority}</td>
       <td data-label="权重">${c.weight}</td>
@@ -299,8 +298,8 @@ window.testCh = async function (id) {
   try {
     // 该端点恒 200，逐密钥结果在 body.keys
     const r = await api(`/api/admin/channels/${id}/test`, { method: 'POST' });
-    const parts = (r.keys || []).map(k =>
-      `${k.masked} ${k.ok ? '正常' + (k.models ? `（${k.models} 个模型）` : '') : '失败：' + (k.error || '未知错误')}`);
+    const parts = (r.keys || []).map((k, i) =>
+      `第 ${i + 1} 把 ${k.ok ? '正常' + (k.models ? `（${k.models} 个模型）` : '') : '失败：' + (k.error || '未知错误')}`);
     toast(parts.length ? parts.join('\n') : '无密钥可测', r.ok);
   } catch (ex) { toast('测试请求失败：' + ex.message, false); }
 };

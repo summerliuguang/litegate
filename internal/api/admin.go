@@ -51,6 +51,7 @@ func (a *admin) register(mux *http.ServeMux) {
 	mux.Handle("GET /api/admin/config/export", a.auth(a.exportConfig))
 	mux.Handle("POST /api/admin/config/import", a.auth(a.importConfig))
 	mux.Handle("GET /api/admin/logs", a.auth(a.listLogs))
+	mux.Handle("GET /api/admin/logs/summary", a.auth(a.listLogSummaries))
 	mux.Handle("GET /api/admin/prices", a.auth(a.listPrices))
 	mux.Handle("PUT /api/admin/prices", a.auth(a.upsertPrice))
 	mux.Handle("DELETE /api/admin/prices/{model...}", a.auth(a.deletePrice))
@@ -660,6 +661,33 @@ func (a *admin) upsertPrice(w http.ResponseWriter, r *http.Request) {
 		a.invalidatePrices()
 	}
 	writeJSON(w, http.StatusOK, p)
+}
+
+// listLogSummaries 按模型聚合日志摘要(日志钻取第一层),币种按价格表回填。
+func (a *admin) listLogSummaries(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f := store.LogFilter{
+		App:    q.Get("app"),
+		Status: q.Get("status"),
+		Since:  q.Get("since"),
+		Until:  q.Get("until"),
+	}
+	f.ChannelID, _ = strconv.ParseInt(q.Get("channel_id"), 10, 64)
+	f.APIKeyID, _ = strconv.ParseInt(q.Get("api_key_id"), 10, 64)
+	items, err := a.st.LogSummaries(f)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	var prices []store.ModelPrice
+	if prices, err = a.st.ListModelPrices(); err == nil {
+		for i := range items {
+			if p := store.MatchPrice(prices, items[i].Model); p != nil {
+				items[i].Currency = p.Currency
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (a *admin) deletePrice(w http.ResponseWriter, r *http.Request) {

@@ -1,8 +1,15 @@
-/* hub-nav 扁平现代皮肤(依据 pico-bulma-web-ui 技能 2026-09 规范) */
+/* hub-nav 扁平现代皮肤(依据 webui-design 技能 2026-09 规范) */
 :root{--bg:#f6f7fb;--card:#fff;--line:#e8eaf0;--primary:#3e7bfa;--primary-weak:#eef3ff;
   --text:#1f2430;--muted:#8a90a0;--ok:#22c55e;--bad:#ef4444;--warn:#f59e0b;
   --radius:12px;--radius-s:8px;--gap:1.25rem}
 body{background:var(--bg);color:var(--text);font-variant-numeric:tabular-nums}
+/* 覆盖 Bulma 的 html{background-color:#fff},否则 CSS 加载前/手机回弹露出的画布是白的 */
+html{background:var(--bg)}
+
+/* Bulma 对 is-small 控件写死 2px 圆角(.button.is-small:not(.is-rounded) 三段特异性更高),
+   这里用同等特异性拉平到 8px——小控件全圆角会呈药丸感,8px 是可见但不夸张的档位 */
+.input.is-small,.textarea.is-small,.select.is-small select,
+.button.is-small:not(.is-rounded){border-radius:8px}
 
 /* 卡片:白底+细边框,无阴影 */
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:none}
@@ -56,3 +63,44 @@ textarea:focus-visible,summary:focus-visible,[tabindex]:focus-visible{
 *{-webkit-tap-highlight-color:transparent}
 
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* ===== 夜间模式(2026-09,data-theme=dark,脚本见 theme.js) ===== */
+:root[data-theme="dark"]{--bg:#12141c;--card:#1a1d28;--line:#2a2e3c;--primary-weak:#1d2740;
+  --text:#e2e5ee;--muted:#8f96ab;color-scheme:dark}
+:root[data-theme="dark"] body{background:var(--bg);color:var(--text)}
+:root[data-theme="dark"] .button{background:var(--card);color:var(--text);border-color:#3a4054}
+:root[data-theme="dark"] .button:hover{border-color:#4a5170}
+:root[data-theme="dark"] .button.is-link{background:var(--primary);color:#fff;border-color:transparent}
+:root[data-theme="dark"] .button.is-link:hover{background:#2f66d9}
+:root[data-theme="dark"] .button.is-danger.is-light{background:#3d1f24;color:#f08a8a;border-color:transparent}
+:root[data-theme="dark"] .input,:root[data-theme="dark"] .select select,
+:root[data-theme="dark"] .textarea{background:var(--card);color:var(--text);border-color:#3a4054}
+:root[data-theme="dark"] .input::placeholder,:root[data-theme="dark"] .textarea::placeholder{color:#6b7288}
+:root[data-theme="dark"] .select:not(.is-multiple)::after{border-color:#8f96ab}
+:root[data-theme="dark"] .table{background:transparent;color:var(--text)}
+:root[data-theme="dark"] .table th{color:var(--text)}
+:root[data-theme="dark"] .title,:root[data-theme="dark"] .heading,:root[data-theme="dark"] .label{color:var(--text)}
+:root[data-theme="dark"] .tag:not(.is-success):not(.is-danger):not(.is-warning):not(.is-info):not(.is-primary){background:#262a38;color:var(--text)}
+:root[data-theme="dark"] .notification{background:var(--card);color:var(--text)}
+:root[data-theme="dark"] .bar-track{background:#262a38}
+:root[data-theme="dark"] #chatLog{background:var(--card)}
+:root[data-theme="dark"] .msg.assistant{background:#1f2330;border-color:#2a2e3c}
+:root[data-theme="dark"] .msg.user{background:#1d2740;border-color:#2c3a5e}
+:root[data-theme="dark"] .msg .reasoning{color:#8f96ab;border-left-color:#3a4054}
+
+/* 夜间模式:编辑弹窗(Bulma modal-card 硬编码白底/深字,必须逐个覆盖) */
+:root[data-theme="dark"] .modal-card{background:var(--card);color:var(--text)}
+:root[data-theme="dark"] .modal-card-head,
+:root[data-theme="dark"] .modal-card-foot{background:var(--card);border-color:var(--line)}
+:root[data-theme="dark"] .modal-card-head{border-bottom:1px solid var(--line)}
+:root[data-theme="dark"] .modal-card-foot{border-top:1px solid var(--line)}
+:root[data-theme="dark"] .modal-card-title{color:var(--text)}
+:root[data-theme="dark"] .modal-card-body{color:var(--text)}
+:root[data-theme="dark"] .checkbox,:root[data-theme="dark"] .radio{color:var(--text)}
+
+/* 夜间模式:行内代码/代码块(Bulma code 硬编码浅灰底+红字,夜间刺眼) */
+:root[data-theme="dark"] code{background:#262a38;color:#e2e5ee}
+:root[data-theme="dark"] pre{background:var(--card);color:var(--text)}
+:root[data-theme="dark"] pre code{background:transparent;color:var(--text)}
+/* 弹窗 body 显式压底色:modal-card 的背景在部分浏览器/缓存组合下透不出来 */
+:root[data-theme="dark"] .modal-card-body{background:var(--card)}

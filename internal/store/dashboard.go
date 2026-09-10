@@ -123,7 +123,7 @@ func (s *Store) Dashboard() (*Dashboard, error) {
 
 	rows, err = s.DB.Query(`
 		SELECT model, COUNT(*), IFNULL(SUM(prompt_tokens), 0), IFNULL(SUM(completion_tokens), 0), IFNULL(ROUND(SUM(cost), 6), 0)
-		FROM request_logs WHERE ` + sqlLast7Days + `
+		FROM request_logs WHERE ` + sqlLast7Days + ` AND model != ''
 		GROUP BY model ORDER BY SUM(cost) DESC, model LIMIT 10`)
 	if err != nil {
 		return nil, err
@@ -141,12 +141,12 @@ func (s *Store) Dashboard() (*Dashboard, error) {
 		return nil, err
 	}
 
-	// 渠道可能已被删除，左连接取名字，名字留空
+	// 渠道可能已被删除：只统计仍存在的渠道（已删除渠道不在榜单展示）
 	rows, err = s.DB.Query(`
 		SELECT r.channel_id, IFNULL(c.name, ''), COUNT(*),
 		       IFNULL(SUM(r.prompt_tokens), 0), IFNULL(SUM(r.completion_tokens), 0), IFNULL(ROUND(SUM(r.cost), 6), 0)
 		FROM request_logs r LEFT JOIN channels c ON c.id = r.channel_id
-		WHERE r.` + sqlLast7Days + `
+		WHERE r.` + sqlLast7Days + ` AND c.id IS NOT NULL
 		GROUP BY r.channel_id ORDER BY SUM(r.cost) DESC, r.channel_id LIMIT 10`)
 	if err != nil {
 		return nil, err

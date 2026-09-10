@@ -76,8 +76,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 // readJSON 解析请求体 JSON；超出限制或格式错误时直接写 400 并返回 error。
 func readJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	return readJSONLimit(w, r, dst, 1<<20)
+}
+
+// readJSONLimit 同 readJSON,请求体上限由调用方给定(对话测试带附件时放宽到数据面上限)。
+func readJSONLimit(w http.ResponseWriter, r *http.Request, dst any, limit int64) error {
 	defer r.Body.Close()
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	if err := dec.Decode(dst); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json: " + err.Error()})
 		return err
