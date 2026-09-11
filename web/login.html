@@ -24,6 +24,12 @@
     <p id="err" class="help is-danger" style="min-height:1.2em"></p>
     <button class="button is-link is-fullwidth" id="btn" type="submit">登 录</button>
   </form>
+  <div class="is-flex is-align-items-center my-3" style="gap:.75rem">
+    <span style="flex:1;height:1px;background:#dbdbdb"></span>
+    <span class="is-size-7 has-text-grey">或</span>
+    <span style="flex:1;height:1px;background:#dbdbdb"></span>
+  </div>
+  <a class="button is-fullwidth" id="ssobtn" href="/api/admin/sso-redirect">使用家庭统一登录（SSO）</a>
   <p class="has-text-centered is-size-7 has-text-grey" style="margin-top:1rem">会话有效期 7 天 · 服务重启后需重新登录</p>
 </div>
 <script src="/static/common.js"></script>
@@ -32,6 +38,12 @@
 // 已登录直接进仪表盘
 if (getToken()) {
   api('/api/admin/dashboard').then(() => { location.href = '/'; }).catch(() => {});
+} else {
+  // SSO 已登录(浏览器有统一登录 Cookie)则免密直达面板；未登录静默留在本页
+  fetch('/api/admin/sso-login').then(r => r.ok ? r.json() : Promise.reject()).then(data => {
+    setToken(data.token);
+    location.href = '/';
+  }).catch(() => {});
 }
 document.getElementById('form').addEventListener('submit', async e => {
   e.preventDefault();

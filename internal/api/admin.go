@@ -2,9 +2,11 @@ package api
 
 import (
 	"crypto/subtle"
+	"io"
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +32,10 @@ type admin struct {
 
 func (a *admin) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/login", a.login)
+	// SSO 会话登录：浏览器带统一登录 Cookie 访问面板时,前端调本端点换取面板 token
+	mux.HandleFunc("GET /api/admin/sso-login", a.ssoLogin)
+	// 跳统一登录页(登录后回面板根路径)
+	mux.HandleFunc("GET /api/admin/sso-redirect", a.ssoRedirect)
 	mux.Handle("GET /api/admin/dashboard", a.auth(a.dashboard))
 	mux.Handle("GET /api/admin/channels", a.auth(a.listChannels))
 	mux.Handle("POST /api/admin/channels", a.auth(a.createChannel))
@@ -119,6 +125,53 @@ func (a *admin) login(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+}
+
+// ssoVerifyClient 仅访问本机 sso 服务,超时从紧避免面板登录被拖住。
+var ssoVerifyClient = &http.Client{Timeout: 3 * time.Second}
+
+// ssoLogin 用家庭统一登录(SSO)的会话换取面板 token：转发浏览器 Cookie 到本机
+// sso 服务(/verify,仅监听回环)验证,通过即签发与管理密码登录同权的面板会话。
+// 这样面板既可以管理密码登录,也可以点"SSO 登录"走域账号,二者同权。
+func (a *admin) ssoLogin(w http.ResponseWriter, r *http.Request) {
+	cookie := r.Header.Get("Cookie")
+	if cookie == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "no sso session"})
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, "http://127.0.0.1:5090/verify", nil)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	req.Header.Set("Cookie", cookie)
+	resp, err := ssoVerifyClient.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "sso verify unreachable"})
+		return
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
+	if resp.StatusCode != http.StatusOK {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "sso session invalid"})
+		return
+	}
+	tok := cryptoutil.RandomHex(32)
+	a.mu.Lock()
+	a.sessions[tok] = time.Now().Add(7 * 24 * time.Hour)
+	a.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+}
+
+// ssoRedirect 302 到家庭统一登录页,登录后原路回到面板根路径。
+// 登录页地址与 nginx 片段(sso-auth.conf)保持同一约定:29010 端口。
+func (a *admin) ssoRedirect(w http.ResponseWriter, r *http.Request) {
+	scheme := "https"
+	if r.Header.Get("X-Forwarded-Proto") == "http" {
+		scheme = "http"
+	}
+	back := scheme + "://" + r.Host + "/"
+	http.Redirect(w, r, "https://192.168.5.15:29010/login?back="+url.QueryEscape(back), http.StatusFound)
 }
 
 // clientIP 提取来源 IP（家庭内网直接 RemoteAddr；经 nginx 时 X-Real-IP 可信）。

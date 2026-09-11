@@ -67,6 +67,9 @@ func (p *proxy) register(mux *http.ServeMux) {
 	// 音频端点：TTS 请求是 JSON，转写是 multipart（model 在表单字段），都按 openai 渠道转发
 	mux.HandleFunc("POST /v1/audio/speech", p.serveAudioSpeech)
 	mux.HandleFunc("POST /v1/audio/transcriptions", p.serveAudioTranscriptions)
+	// Groq SDK 风格客户端的路径自带 /openai/v1 前缀（base_url 只填主机名），注册同款别名
+	mux.HandleFunc("POST /openai/v1/audio/speech", p.serveAudioSpeech)
+	mux.HandleFunc("POST /openai/v1/audio/transcriptions", p.serveAudioTranscriptions)
 	mux.HandleFunc("GET /v1/models", p.serveModels)
 }
 
@@ -169,6 +172,8 @@ func (p *proxy) serveAudioTranscriptions(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "audio/transcriptions requires a model field"})
 		return
 	}
+	// OpenAI 协议的 response_format: json(默认)或 text；text 时直接回纯文本
+	respFormat := strings.TrimSpace(r.FormValue("response_format"))
 	file, hdr, err := r.FormFile("file")
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "audio/transcriptions requires a file field"})
@@ -198,12 +203,15 @@ func (p *proxy) serveAudioTranscriptions(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	p.serveBody(w, r, "openai", "/chat/completions", "audio", model, chatBody, decodeChatText)
+	p.serveBody(w, r, "openai", "/chat/completions", "audio", model, chatBody, func(resp *http.Response) (*http.Response, error) {
+		return decodeChatText(resp, respFormat == "text")
+	})
 }
 
 // decodeChatText 把 MiMo chat 转写响应（message.content 为文本）转换成标准
-// OpenAI transcriptions 响应 {"text":...}；上游非 200 时原样透传错误。
-func decodeChatText(resp *http.Response) (*http.Response, error) {
+// OpenAI transcriptions 响应；wantText 时回纯文本（Groq 等客户端 response_format=text
+// 的期望格式），否则回 {"text":...} JSON。上游非 200 时原样透传错误。
+func decodeChatText(resp *http.Response, wantText bool) (*http.Response, error) {
 	if resp.StatusCode != http.StatusOK {
 		return resp, nil
 	}
@@ -222,12 +230,18 @@ func decodeChatText(resp *http.Response) (*http.Response, error) {
 	if err := json.Unmarshal(body, &v); err != nil || len(v.Choices) == 0 {
 		return nil, fmt.Errorf("upstream chat response carries no transcription")
 	}
-	out, err := json.Marshal(map[string]string{"text": v.Choices[0].Message.Content})
-	if err != nil {
-		return nil, err
-	}
 	header := http.Header{}
-	header.Set("Content-Type", "application/json")
+	var out []byte
+	if wantText {
+		out = []byte(v.Choices[0].Message.Content)
+		header.Set("Content-Type", "text/plain; charset=utf-8")
+	} else {
+		out, err = json.Marshal(map[string]string{"text": v.Choices[0].Message.Content})
+		if err != nil {
+			return nil, err
+		}
+		header.Set("Content-Type", "application/json")
+	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Proto:      "HTTP/1.1",
