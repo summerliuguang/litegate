@@ -9,9 +9,9 @@
 <link rel="stylesheet" href="/static/skin.css">
 <link rel="stylesheet" href="/static/admin.css">
 <style>
-  #chatLog{height:52vh;overflow-y:auto;background:var(--card,#fff);border:1px solid var(--line,#e8eaf0);
+  #chatLog{height:50vh;overflow-y:auto;background:var(--card,#fff);border:1px solid var(--line,#e8eaf0);
     border-radius:16px;padding:.9rem;display:flex;flex-direction:column;gap:.7rem}
-  .msg{max-width:82%;padding:.55rem .8rem;border-radius:14px;font-size:.85rem;white-space:pre-wrap;
+  .msg{max-width:82%;min-width:0;padding:.55rem .8rem;border-radius:14px;font-size:.85rem;white-space:pre-wrap;
     overflow-wrap:anywhere;line-height:1.55}
   .msg.user{align-self:flex-end;background:var(--primary-weak,#eef3ff);border:1px solid #d5e0fb}
   .msg.assistant{align-self:flex-start;background:var(--bg,#f7f8fa);border:1px solid var(--line,#e8eaf0)}
@@ -21,18 +21,25 @@
   .msg .reasoning-body{white-space:pre-wrap;margin-top:.25rem}
   .msg .meta{color:#b0b0c2;font-size:.7rem;margin-top:.35rem}
   .msg.err{background:#fff5f5;border:1px solid #f5c6c6;color:#c0392b}
-
-  /* 系统提示/清空 行 */
+  .msg .att-name{display:inline-block;background:var(--card,#fff);border:1px solid var(--line,#e8eaf0);
+    border-radius:999px;padding:0 .5rem;font-size:.7rem;margin:0 .25rem .25rem 0}
+  .actions{display:flex;align-items:center;gap:.15rem;margin-top:.35rem;flex-wrap:wrap}
+  .act-btn{border:none;background:none;cursor:pointer;color:var(--muted,#8a90a0);font-size:.7rem;
+    padding:.15rem .4rem;border-radius:8px;display:inline-flex;align-items:center;gap:.2rem;
+    transition:background-color .18s ease,color .18s ease}
+  .act-btn:hover{background:var(--primary-weak,#eef3ff);color:var(--primary,#3e7bfa)}
+  .var-nav{display:inline-flex;align-items:center;gap:.1rem;color:var(--muted,#8a90a0);font-size:.7rem}
+  .var-nav button{border:none;background:none;cursor:pointer;color:var(--muted,#8a90a0);
+    padding:.1rem .25rem;font-size:.85rem;line-height:1}
+  .var-nav button:disabled{opacity:.35;cursor:default}
   .chat-top{display:flex;align-items:center;gap:.5rem;margin-bottom:.6rem}
   .chip-btn{border:1px solid var(--line,#e8eaf0);background:var(--card,#fff);color:var(--text,#1f2430);
     border-radius:999px;padding:.25rem .75rem;font-size:.78rem;cursor:pointer;
     transition:background-color .18s ease,border-color .18s ease}
   .chip-btn:hover{border-color:#c9cfdd;background:var(--primary-weak,#eef3ff)}
   .chip-btn.on{background:var(--primary-weak,#eef3ff);border-color:var(--primary,#3e7bfa);color:var(--primary,#3e7bfa)}
-  #sysRow{margin:-.3rem 0 .6rem;display:none}
-  #sysRow.open{display:block}
-
-  /* 附件预览条 */
+  #sysRow,#voiceDescRow{margin:-.3rem 0 .6rem;display:none}
+  #sysRow.open,#voiceDescRow.open{display:block}
   #attachRow{display:flex;flex-wrap:wrap;gap:.4rem;margin:.6rem 0 0}
   #attachRow:empty{display:none}
   .att-chip{display:inline-flex;align-items:center;gap:.4rem;border:1px solid var(--line,#e8eaf0);
@@ -42,8 +49,6 @@
   .att-chip .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:11rem}
   .att-chip button{border:none;background:none;cursor:pointer;color:#9898ac;font-size:.9rem;line-height:1;padding:0 .3rem}
   .att-chip button:hover{color:#c0392b}
-
-  /* 圆角输入卡:附件/模型/上下文/发送都在卡内 */
   .composer{margin-top:.7rem;background:var(--card,#fff);border:1px solid var(--line,#e8eaf0);
     border-radius:16px;padding:.65rem .75rem .55rem;position:relative}
   .composer:focus-within{border-color:var(--primary,#3e7bfa);box-shadow:0 0 0 3px var(--primary-weak,#eef3ff)}
@@ -66,24 +71,33 @@
     display:flex;align-items:center;justify-content:center;background:var(--primary,#3e7bfa);color:#fff;
     transition:background-color .18s ease,transform .18s ease}
   .send-btn:hover{background:#2f66d9}
-  .send-btn:disabled{opacity:.45;cursor:not-allowed}
   .send-btn.stop{background:#ef4444}
-  /* 模型下拉:从输入卡上沿弹出 */
-  .model-menu{display:none;position:absolute;left:.75rem;right:.75rem;bottom:calc(100% + .4rem);
+  .pop-menu{display:none;position:absolute;left:.75rem;right:.75rem;bottom:calc(100% + .4rem);
     z-index:30;background:var(--card,#fff);border:1px solid var(--line,#e8eaf0);border-radius:14px;
     box-shadow:0 8px 28px rgba(25,30,55,.16);max-height:46vh;overflow-y:auto;padding:.3rem}
-  .model-menu.open{display:block}
-  .model-menu button{display:flex;align-items:center;justify-content:space-between;width:100%;
+  .pop-menu.open{display:block}
+  .pop-menu button{display:flex;align-items:center;justify-content:space-between;width:100%;
     border:none;background:none;cursor:pointer;color:var(--text,#1f2430);font-size:.82rem;
     text-align:left;padding:.5rem .65rem;border-radius:10px;gap:.5rem}
-  .model-menu button:hover{background:var(--primary-weak,#eef3ff)}
-  .model-menu button.sel{color:var(--primary,#3e7bfa);font-weight:600}
-  .model-menu .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .model-menu .kind{flex:none;color:var(--muted,#a0a0b8);font-size:.66rem;
+  .pop-menu button:hover{background:var(--primary-weak,#eef3ff)}
+  .pop-menu button.sel{color:var(--primary,#3e7bfa);font-weight:600}
+  .pop-menu .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pop-menu .kind{flex:none;color:var(--muted,#a0a0b8);font-size:.66rem;
     border:1px solid var(--line,#e8eaf0);border-radius:999px;padding:0 .4rem}
-  .msg audio{width:100%;margin:.2rem 0}
+  .pop-menu .del{flex:none;border:none;background:none;color:#9898ac;font-size:.85rem;padding:0 .2rem}
+  .pop-menu .del:hover{color:#c0392b}
+  .mini-player{display:flex;align-items:center;gap:.5rem;width:100%;min-width:0;margin:.2rem 0}
+  .mini-player .pp{width:30px;height:30px;border-radius:999px;border:none;background:var(--primary,#3e7bfa);
+    color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;flex:none;
+    transition:background-color .18s ease}
+  .mini-player .pp:hover{background:#2f66d9}
+  .mini-player .bar{flex:1;height:6px;background:var(--line,#e8eaf0);border-radius:999px;
+    position:relative;cursor:pointer;min-width:0}
+  .mini-player .bar .fill{position:absolute;left:0;top:0;bottom:0;width:0;
+    background:var(--primary,#3e7bfa);border-radius:999px}
+  .mini-player .tm{font-size:.66rem;color:var(--muted,#8a90a0);flex:none;font-variant-numeric:tabular-nums}
   @media (max-width:768px){
-    #chatLog{height:46vh}
+    #chatLog{height:44vh}
     .msg{max-width:92%}
     .composer{padding:.55rem .6rem .45rem}
   }
@@ -94,7 +108,7 @@
   <h1 class="title is-4" style="margin:0 0 .3rem">对话测试</h1>
   <p class="is-size-7 has-text-grey" style="margin:0 0 .6rem">
     走网关真实数据面（渠道选择 / 限流预算 / 日志成本照常记录，应用标记为 <code>playground</code>）。
-    调用使用第一把可用的启用虚拟密钥。
+    所有启用模型均可测试，不受密钥白名单限制。
   </p>
 
   <div class="chat-top">
@@ -105,13 +119,20 @@
   <div id="sysRow">
     <input class="input is-small" id="fSystem" placeholder="系统提示（可选，仅对本次对话生效），例如：你是一个简洁的助手">
   </div>
-  <div id="voiceDescRow" style="display:none;margin:-.3rem 0 .6rem">
+  <div id="voiceDescRow">
     <input class="input is-small" id="fVoiceDesc" placeholder="声音风格描述（voicedesign 必填），例如：温柔的年轻女声，语速平缓">
   </div>
 
   <div id="chatLog"><div class="has-text-grey is-size-7" style="margin:auto">选个模型，发一句话试试</div></div>
 
   <div id="attachRow"></div>
+
+  <div class="tpl-row">
+    <select class="input is-small" id="tplSelect" style="flex:1;min-width:0">
+      <option value="">选择模板…（打字时也会自动联想）</option>
+    </select>
+    <button class="chip-btn" id="btnTplSave" title="把当前输入保存为模板">存为模板</button>
+  </div>
 
   <div class="composer">
     <textarea id="fInput" rows="1" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
@@ -146,9 +167,11 @@
       <input type="file" id="fFiles" multiple hidden
         accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.json,.csv,.log,.xml,.yaml,.yml,.py,.js,.ts,.go,.html,.css,.sql,.sh">
     </div>
-    <div class="model-menu" id="modelMenu"></div>
+    <div class="pop-menu" id="modelMenu"></div>
+    <div class="pop-menu" id="tplMenu"></div>
   </div>
 </div>
+<div id="toast" class="toast"></div>
 <script src="/static/common.js"></script>
 <script>
 'use strict';
@@ -161,34 +184,41 @@ const btnSend = document.getElementById('btnSend');
 const btnStop = document.getElementById('btnStop');
 const btnClear = document.getElementById('btnClear');
 const btnSys = document.getElementById('btnSys');
+const sysRow = document.getElementById('sysRow');
 const voiceDescRow = document.getElementById('voiceDescRow');
 const fVoiceDesc = document.getElementById('fVoiceDesc');
-const sysRow = document.getElementById('sysRow');
 const btnAttach = document.getElementById('btnAttach');
 const fFiles = document.getElementById('fFiles');
 const attachRow = document.getElementById('attachRow');
 const modelChip = document.getElementById('modelChip');
 const chipName = document.getElementById('chipName');
 const modelMenu = document.getElementById('modelMenu');
+const tplMenu = document.getElementById('tplMenu');
+const tplSelect = document.getElementById('tplSelect');
 const ctxInfo = document.getElementById('ctxInfo');
 
 let models = [];
 let model = '';
-let messages = [];   // {role, content}，不含 system 与流式中的临时内容
-let attachments = []; // {name, kind:'image'|'text', dataUrl?, text?}
+let turns = [];        // 每轮对话:{user, variants:[{reasoning,acc,url?,size?,usage?}], cur, el, kind, text/ref/desc/file/name}
+let attachments = [];  // {name, kind:'image'|'text'|'audio', dataUrl?, text?, file?}
 let busy = false;
 let ctrl = null;
 
 const IMG_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 const TEXT_EXT = /\.(txt|md|json|csv|log|xml|ya?ml|py|js|ts|go|html|css|sql|sh)$/i;
+const TPL_KEY = 'litegate.playground.templates';
 
-// 模型分类:语音合成(tts)/语音转写(asr)/多模态(图像理解)/语言。选中后输入区随类别变化
 const KIND_LABEL = { chat: '语言', omni: '多模态', asr: '语音转写', tts: '语音合成' };
 function kindOf(m) {
   if (/tts/i.test(m)) return 'tts';
   if (/asr/i.test(m)) return 'asr';
   if (/vision|omni/i.test(m) || m === 'deepseek-flash') return 'omni';
   return 'chat';
+}
+function ttsVariant(m) {
+  if (/voiceclone/i.test(m)) return 'clone';
+  if (/voicedesign/i.test(m)) return 'design';
+  return 'base';
 }
 
 async function loadModels() {
@@ -208,7 +238,7 @@ async function loadModels() {
         chipName.textContent = model;
         syncMenu();
         applyKind();
-        toggleMenu(false);
+        toggleMenu(modelMenu, false);
       });
     });
     syncMenu();
@@ -224,25 +254,23 @@ function syncMenu() {
   });
 }
 
-function toggleMenu(open) {
-  modelMenu.classList.toggle('open', open == null ? !modelMenu.classList.contains('open') : open);
+function toggleMenu(menu, open) {
+  menu.classList.toggle('open', open == null ? !menu.classList.contains('open') : open);
 }
-modelChip.addEventListener('click', e => { e.stopPropagation(); toggleMenu(); });
+modelChip.addEventListener('click', e => { e.stopPropagation(); toggleMenu(modelMenu); });
 document.addEventListener('click', e => {
-  if (!e.target.closest('.model-menu') && !e.target.closest('.model-chip')) toggleMenu(false);
+  if (!e.target.closest('.model-menu') && !e.target.closest('.model-chip')) toggleMenu(modelMenu, false);
+  if (!e.target.closest('#tplMenu') && !e.target.closest('#tplSelect') && !e.target.closest('#fInput')) toggleMenu(tplMenu, false);
 });
 
-// 按模型类别切换输入区:附件按钮显隐、可选文件类型、占位提示
 function applyKind() {
   const k = kindOf(model);
   const v = k === 'tts' ? ttsVariant(model) : null;
-  // voiceclone 需要参考音频,允许音频附件;其余 TTS 变体不使用
   btnAttach.style.display = (k === 'tts' && v === 'clone') || k === 'asr' ? 'flex' : 'none';
   fFiles.accept = (k === 'asr' || (k === 'tts' && v === 'clone'))
     ? 'audio/wav,audio/mpeg,.wav,.mp3'
     : 'image/png,image/jpeg,image/webp,image/gif,.txt,.md,.json,.csv,.log,.xml,.yaml,.yml,.py,.js,.ts,.go,.html,.css,.sql,.sh';
-  if (k === 'tts') attachments = attachments.filter(a => a.kind === 'audio');
-  else if (k === 'asr') attachments = attachments.filter(a => a.kind === 'audio');
+  if (k === 'tts' || k === 'asr') attachments = attachments.filter(a => a.kind === 'audio');
   else attachments = attachments.filter(a => a.kind !== 'audio');
   renderAttachments();
   voiceDescRow.style.display = (k === 'tts' && v === 'design') ? 'block' : 'none';
@@ -255,10 +283,69 @@ function applyKind() {
        : '输入要合成的文本，发送即合成语音',
   }[k] || '';
 }
-function ttsVariant(m) {
-  if (/voiceclone/i.test(m)) return 'clone';
-  if (/voicedesign/i.test(m)) return 'design';
-  return 'base';
+
+function renderAttachments() {
+  attachRow.innerHTML = attachments.map((a, i) => {
+    let thumb;
+    if (a.kind === 'image') thumb = `<img src="${a.dataUrl}" alt="">`;
+    else if (a.kind === 'audio') thumb = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 2v14"/><path d="M8 6l4-4 4 4"/><rect x="4" y="14" width="16" height="8" rx="2"/></svg>`;
+    else thumb = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>`;
+    return `<span class="att-chip">${thumb}<span class="n">${esc(a.name)}</span>
+      <button type="button" data-i="${i}" aria-label="移除附件">✕</button></span>`;
+  }).join('');
+  attachRow.querySelectorAll('button').forEach(b =>
+    b.addEventListener('click', () => { attachments.splice(+b.dataset.i, 1); renderAttachments(); }));
+}
+
+btnAttach.addEventListener('click', () => fFiles.click());
+fFiles.addEventListener('change', () => {
+  const k = kindOf(model);
+  for (const file of fFiles.files) {
+    if (k === 'asr' || (k === 'tts' && ttsVariant(model) === 'clone')) {
+      if (!file.type.startsWith('audio/') && !/\.(wav|mp3|m4a|webm)$/i.test(file.name)) {
+        toast('仅支持音频文件（wav/mp3）：' + file.name, false); continue;
+      }
+      if (file.size > 16 * 1024 * 1024) { toast(`音频 ${file.name} 超过 16MB，已跳过`, false); continue; }
+      if (k === 'asr') {
+        attachments = [{ name: file.name, kind: 'audio', file }];
+        renderAttachments();
+      } else {
+        const r = new FileReader();
+        r.onload = () => { attachments = [{ name: file.name, kind: 'audio', dataUrl: r.result }]; renderAttachments(); };
+        r.readAsDataURL(file);
+      }
+    } else if (IMG_TYPES.includes(file.type)) {
+      if (file.size > 8 * 1024 * 1024) { toast(`图片 ${file.name} 超过 8MB，已跳过`, false); continue; }
+      const r = new FileReader();
+      r.onload = () => { attachments.push({ name: file.name, kind: 'image', dataUrl: r.result }); renderAttachments(); };
+      r.readAsDataURL(file);
+    } else if (TEXT_EXT.test(file.name)) {
+      if (file.size > 256 * 1024) { toast(`文本 ${file.name} 超过 256KB，已跳过`, false); continue; }
+      const r = new FileReader();
+      r.onload = () => { attachments.push({ name: file.name, kind: 'text', text: r.result }); renderAttachments(); };
+      r.readAsText(file);
+    } else {
+      toast(`不支持的类型：${file.name}`, false);
+    }
+  }
+  fFiles.value = '';
+});
+
+function buildContent(text) {
+  let full = text;
+  for (const a of attachments) {
+    if (a.kind === 'text') full += `\n\n【附件：${a.name}】\n\`\`\`\n${a.text}\n\`\`\``;
+  }
+  const images = attachments.filter(a => a.kind === 'image');
+  if (!images.length) return full;
+  if (!/vision|omni/i.test(model) && model !== 'deepseek-flash') toast('图片以 base64 随请求发送，是否接受取决于模型的图像理解能力', false);
+  const parts = [{ type: 'text', text: full }];
+  for (const img of images) parts.push({ type: 'image_url', image_url: { url: img.dataUrl } });
+  return parts;
+}
+
+function setCtx(tokens) {
+  ctxInfo.textContent = tokens == null ? '—' : fmtTok(tokens);
 }
 
 function bubble(cls) {
@@ -272,8 +359,6 @@ function bubble(cls) {
 }
 
 function renderStream(el, reasoning, acc) {
-  // 思考过程做成 <details> 折叠块:思考中保持展开,正文开始输出时自动折叠一次;
-  // 增量更新节点,保留用户手动开合状态
   let det = el.querySelector('details.reasoning');
   if (reasoning) {
     if (!det) {
@@ -310,78 +395,194 @@ function setUI(streaming) {
   btnStop.style.display = streaming ? 'flex' : 'none';
 }
 
-// ===== 附件 =====
-function renderAttachments() {
-  attachRow.innerHTML = attachments.map((a, i) => {
-    let thumb;
-    if (a.kind === 'image') thumb = `<img src="${a.dataUrl}" alt="">`;
-    else if (a.kind === 'audio') thumb = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 2v14"/><path d="M8 6l4-4 4 4"/><rect x="4" y="14" width="16" height="8" rx="2"/></svg>`;
-    else thumb = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>`;
-    return `<span class="att-chip">${thumb}<span class="n">${esc(a.name)}</span>
-      <button type="button" data-i="${i}" aria-label="移除附件">✕</button></span>`;
-  }).join('');
-  attachRow.querySelectorAll('button').forEach(b =>
-    b.addEventListener('click', () => { attachments.splice(+b.dataset.i, 1); renderAttachments(); }));
+function renderActions(turn) {
+  const old = turn.el.querySelector('.actions');
+  if (old) old.remove();
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  if (turn.variants.length > 1) {
+    const nav = document.createElement('span');
+    nav.className = 'var-nav';
+    nav.innerHTML = `<button type="button" data-d="-1" ${turn.cur <= 0 ? 'disabled' : ''}>‹</button>` +
+      `<span>${turn.cur + 1}/${turn.variants.length}</span>` +
+      `<button type="button" data-d="1" ${turn.cur >= turn.variants.length - 1 ? 'disabled' : ''}>›</button>`;
+    nav.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      const next = turn.cur + (+b.dataset.d);
+      if (next < 0 || next >= turn.variants.length) return;
+      turn.cur = next;
+      if (turn.kind === 'tts') renderTTSContent(turn);
+      else renderTurnContent(turn);
+      renderActions(turn);
+    }));
+    actions.appendChild(nav);
+  }
+  if (turn.kind !== 'tts') {
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'act-btn';
+    copy.textContent = '复制';
+    copy.addEventListener('click', async () => {
+      const v = turn.variants[turn.cur];
+      const text = (v ? v.acc : '') || '';
+      try { await navigator.clipboard.writeText(text); toast('已复制'); }
+      catch (_) {
+        const ta = document.createElement('textarea');
+        ta.value = text; document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); ta.remove(); toast('已复制');
+      }
+    });
+    actions.appendChild(copy);
+  }
+  if (turn === turns[turns.length - 1]) {
+    const regen = document.createElement('button');
+    regen.type = 'button';
+    regen.className = 'act-btn';
+    regen.textContent = '重新生成';
+    regen.addEventListener('click', () => {
+      if (busy) return;
+      if (turn.kind === 'tts') regenerateTTS(turn);
+      else if (turn.kind === 'asr') regenerateASR(turn);
+      else regenerateChat(turn);
+    });
+    actions.appendChild(regen);
+  }
+  if (actions.children.length) turn.el.appendChild(actions);
 }
 
-btnAttach.addEventListener('click', () => fFiles.click());
-fFiles.addEventListener('change', () => {
-  const k = kindOf(model);
-  for (const file of fFiles.files) {
-    if (k === 'asr' || (k === 'tts' && ttsVariant(model) === 'clone')) {
-      if (!file.type.startsWith('audio/') && !/\.(wav|mp3|m4a|webm)$/i.test(file.name)) {
-        toast('仅支持音频文件（wav/mp3）：' + file.name, false); continue;
-      }
-      if (file.size > 16 * 1024 * 1024) { toast(`音频 ${file.name} 超过 16MB，已跳过`, false); continue; }
-      if (k === 'asr') {
-        attachments = [{ name: file.name, kind: 'audio', file }]; // 单个音频
-        renderAttachments();
-      } else {
-        const r = new FileReader(); // voiceclone 参考音频转 dataURL
-        r.onload = () => { attachments = [{ name: file.name, kind: 'audio', dataUrl: r.result }]; renderAttachments(); };
-        r.readAsDataURL(file);
-      }
-    } else if (IMG_TYPES.includes(file.type)) {
-      if (file.size > 8 * 1024 * 1024) { toast(`图片 ${file.name} 超过 8MB，已跳过`, false); continue; }
-      const r = new FileReader();
-      r.onload = () => { attachments.push({ name: file.name, kind: 'image', dataUrl: r.result }); renderAttachments(); };
-      r.readAsDataURL(file);
-    } else if (TEXT_EXT.test(file.name)) {
-      if (file.size > 256 * 1024) { toast(`文本 ${file.name} 超过 256KB，已跳过`, false); continue; }
-      const r = new FileReader();
-      r.onload = () => { attachments.push({ name: file.name, kind: 'text', text: r.result }); renderAttachments(); };
-      r.readAsText(file);
-    } else {
-      toast(`不支持的类型：${file.name}`, false);
-    }
-  }
-  fFiles.value = '';
-});
+function renderTurnContent(turn) {
+  const v = turn.variants[turn.cur] || { reasoning: '', acc: '' };
+  renderStream(turn.el, v.reasoning, v.acc);
+  renderMeta(turn);
+  renderActions(turn);
+}
 
-function buildContent(text) {
-  let full = text;
-  for (const a of attachments) {
-    if (a.kind === 'text') full += `\n\n【附件：${a.name}】\n\`\`\`\n${a.text}\n\`\`\``;
+function renderMeta(turn) {
+  const v = turn.variants[turn.cur];
+  const om = turn.el.querySelector('.meta');
+  if (om) om.remove();
+  if (v && v.usage) {
+    const m = document.createElement('div');
+    m.className = 'meta';
+    m.textContent = `输入 ${v.usage.prompt_tokens || 0} tok · 输出 ${v.usage.completion_tokens || 0} tok`
+      + (v.usage.cache_tokens ? ` · 缓存命中 ${v.usage.cache_tokens} tok` : '');
+    turn.el.appendChild(m);
   }
-  const images = attachments.filter(a => a.kind === 'image');
-  if (!images.length) return full;
-  if (!/vision/i.test(model)) toast('图片以 base64 随请求发送，是否接受取决于模型的图像理解能力', false);
-  const parts = [{ type: 'text', text: full }];
-  for (const img of images) parts.push({ type: 'image_url', image_url: { url: img.dataUrl } });
-  return parts;
+  if (v && v.size != null) {
+    const m = document.createElement('div');
+    m.className = 'meta';
+    m.textContent = `TTS 合成完成 · ${(v.size / 1024).toFixed(0)} KB`;
+    turn.el.appendChild(m);
+  }
+}
+
+function renderTTSContent(turn) {
+  const v = turn.variants[turn.cur];
+  if (!v || !v.url) return;
+  turn.el.innerHTML = '';
+  turn.el.appendChild(buildMiniPlayer(v.url));
+  const dl = document.createElement('a');
+  dl.href = v.url; dl.download = 'tts.mp3'; dl.textContent = '下载音频';
+  dl.style.cssText = 'display:inline-block;margin:.3rem 0 0;font-size:.72rem;color:var(--primary,#3e7bfa)';
+  turn.el.appendChild(dl);
+  renderMeta(turn);
+  renderActions(turn);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+function buildMiniPlayer(url) {
+  const wrap = document.createElement('div');
+  wrap.className = 'mini-player';
+  const audio = new Audio(url);
+  audio.preload = 'metadata';
+  const pp = document.createElement('button');
+  pp.type = 'button'; pp.className = 'pp';
+  const playSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4l14 8-14 8z"/></svg>';
+  const pauseSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
+  pp.innerHTML = playSvg;
+  const bar = document.createElement('div'); bar.className = 'bar';
+  const fill = document.createElement('div'); fill.className = 'fill';
+  bar.appendChild(fill);
+  const tm = document.createElement('span'); tm.className = 'tm'; tm.textContent = '0:00';
+  wrap.appendChild(pp); wrap.appendChild(bar); wrap.appendChild(tm);
+  const fmt = s => isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '0:00';
+  pp.addEventListener('click', () => { audio.paused ? audio.play() : audio.pause(); });
+  audio.addEventListener('play', () => pp.innerHTML = pauseSvg);
+  audio.addEventListener('pause', () => { pp.innerHTML = playSvg; });
+  audio.addEventListener('timeupdate', () => {
+    const d = audio.duration || 0;
+    fill.style.width = (d ? (audio.currentTime / d) * 100 : 0) + '%';
+    tm.textContent = `${fmt(audio.currentTime)} / ${fmt(d)}`;
+  });
+  bar.addEventListener('click', e => {
+    const r = bar.getBoundingClientRect();
+    if (audio.duration) audio.currentTime = ((e.clientX - r.left) / r.width) * audio.duration;
+  });
+  return wrap;
+}
+
+function buildMsgs(skipLastAssistant) {
+  const msgs = [];
+  const sys = fSystem.value.trim();
+  if (sys) msgs.push({ role: 'system', content: sys });
+  turns.forEach((t, i) => {
+    msgs.push({ role: 'user', content: t.user });
+    const skip = skipLastAssistant && i === turns.length - 1;
+    if (!skip) {
+      const v = t.variants[t.cur];
+      if (v && v.acc) msgs.push({ role: 'assistant', content: v.acc });
+    }
+  });
+  return msgs;
 }
 
 function setCtx(tokens) {
   ctxInfo.textContent = tokens == null ? '—' : fmtTok(tokens);
 }
 
-// ===== 发送/停止 =====
 function extractErr(d, resp) {
   if (d && d.error) {
     if (typeof d.error === 'string') return d.error;
     if (d.error.message) return d.error.message;
   }
-  return (d && d.error) || ('HTTP ' + resp.status);
+  return 'HTTP ' + resp.status;
+}
+
+async function streamChat(body, turn, onDelta) {
+  const resp = await fetch('/api/admin/playground/chat', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + getToken(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: ctrl.signal,
+  });
+  if (resp.status === 401) { clearToken(); location.href = '/login.html'; return null; }
+  if (!resp.ok) {
+    let d = null; try { d = await resp.json(); } catch (_) {}
+    throw new Error(extractErr(d, resp));
+  }
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for (const line of lines) {
+      const s = line.trim();
+      if (!s.startsWith('data:')) continue;
+      const payload = s.slice(5).trim();
+      if (payload === '[DONE]') continue;
+      try {
+        const j = JSON.parse(payload);
+        if (j.usage) onDelta.usage = j.usage;
+        const d = j.choices && j.choices[0] && (j.choices[0].delta || {});
+        if (d.reasoning_content) onDelta.reasoning += d.reasoning_content;
+        if (d.content) onDelta.acc += d.content;
+      } catch (_) {}
+    }
+    renderStream(turn.el, onDelta.reasoning, onDelta.acc);
+  }
 }
 
 async function send() {
@@ -390,12 +591,14 @@ async function send() {
   const text = fInput.value.trim();
   if (k === 'tts') {
     if (!text) { toast('请输入要合成的文本', false); return; }
+    hideTplMenu();
     await sendTTS(text);
     return;
   }
   if (k === 'asr') {
     const audio = attachments.find(a => a.kind === 'audio');
     if (!audio) { toast('请先通过 ＋ 附加音频文件（wav/mp3）', false); return; }
+    hideTplMenu();
     await sendASR(audio);
     return;
   }
@@ -403,9 +606,10 @@ async function send() {
   if (!model) { toast('没有可用的模型', false); return; }
   fInput.value = '';
   fInput.style.height = 'auto';
+  hideTplMenu();
   const userContent = buildContent(text);
-  messages.push({ role: 'user', content: userContent });
 
+  const turn = { kind: k, user: userContent, variants: [], cur: 0, el: null };
   const ub = bubble('user');
   if (typeof userContent === 'string') {
     ub.textContent = text;
@@ -422,78 +626,58 @@ async function send() {
   attachments = [];
   renderAttachments();
   setUI(true);
+  turn.el = bubble('assistant');
+  renderStream(turn.el, '', '');
+  turns.push(turn);
 
-  const asst = bubble('assistant');
-  renderStream(asst, '', '');
-  const msgs = [];
-  const sys = fSystem.value.trim();
-  if (sys) msgs.push({ role: 'system', content: sys });
-  msgs.push(...messages);
-
-  let acc = '', reasoning = '', usage = null;
+  const onDelta = { acc: '', reasoning: '' };
+  let usage = null;
   ctrl = new AbortController();
   try {
-    const resp = await fetch('/api/admin/playground/chat', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + getToken(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages: msgs }),
-      signal: ctrl.signal,
-    });
-    if (resp.status === 401) { clearToken(); location.href = '/login.html'; return; }
-    if (!resp.ok) {
-      let d = null; try { d = await resp.json(); } catch (_) {}
-      throw new Error(extractErr(d, resp));
-    }
-    const reader = resp.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop();
-      for (const line of lines) {
-        const s = line.trim();
-        if (!s.startsWith('data:')) continue;
-        const payload = s.slice(5).trim();
-        if (payload === '[DONE]') continue;
-        try {
-          const j = JSON.parse(payload);
-          if (j.usage) usage = j.usage;
-          const d = j.choices && j.choices[0] && (j.choices[0].delta || {});
-          if (d.reasoning_content) reasoning += d.reasoning_content;
-          if (d.content) acc += d.content;
-        } catch (_) { /* 非 JSON 行忽略 */ }
-      }
-      renderStream(asst, reasoning, acc);
-    }
-    messages.push({ role: 'assistant', content: acc });
-    renderStream(asst, reasoning, acc);
-    if (usage) {
-      // 上下文 = 本次请求输入(含全部历史) + 本次输出
-      setCtx((usage.prompt_tokens || 0) + (usage.completion_tokens || 0));
-      const m = document.createElement('div');
-      m.className = 'meta';
-      m.textContent = `输入 ${usage.prompt_tokens || 0} tok · 输出 ${usage.completion_tokens || 0} tok`
-        + (usage.cache_tokens ? ` · 缓存命中 ${usage.cache_tokens} tok` : '');
-      asst.appendChild(m);
-      chatLog.scrollTop = chatLog.scrollHeight;
-    }
+    usage = await streamChat({ model, messages: buildMsgs(false) }, turn, onDelta) || usage;
+    turn.variants.push({ reasoning: onDelta.reasoning, acc: onDelta.acc, usage });
+    turn.cur = turn.variants.length - 1;
+    renderTurnContent(turn);
+    if (usage) setCtx((usage.prompt_tokens || 0) + (usage.completion_tokens || 0));
   } catch (ex) {
     if (ex.name === 'AbortError') {
-      if (acc) messages.push({ role: 'assistant', content: acc });
-      renderStream(asst, reasoning, acc + '\n（已停止）');
+      if (onDelta.acc) { turn.variants.push({ reasoning: onDelta.reasoning, acc: onDelta.acc, usage }); turn.cur = turn.variants.length - 1; renderTurnContent(turn); }
+      else { turn.el.classList.add('err'); turn.el.textContent = '（已停止）'; }
     } else {
-      asst.classList.add('err');
-      asst.textContent = '调用失败：' + ex.message;
+      turn.el.classList.add('err');
+      turn.el.textContent = '调用失败：' + ex.message;
     }
   } finally {
     busy = false; ctrl = null; setUI(false); fInput.focus();
   }
 }
 
-// TTS:非流式 audio/speech,响应即音频字节,气泡内嵌播放器
+async function regenerateChat(turn) {
+  if (busy) return;
+  setUI(true);
+  renderStream(turn.el, '', '');
+  const onDelta = { acc: '', reasoning: '' };
+  let usage = null;
+  ctrl = new AbortController();
+  try {
+    usage = await streamChat({ model, messages: buildMsgs(true) }, turn, onDelta) || usage;
+    turn.variants.push({ reasoning: onDelta.reasoning, acc: onDelta.acc, usage });
+    turn.cur = turn.variants.length - 1;
+    renderTurnContent(turn);
+    if (usage) setCtx((usage.prompt_tokens || 0) + (usage.completion_tokens || 0));
+  } catch (ex) {
+    if (ex.name === 'AbortError') {
+      if (onDelta.acc) { turn.variants.push({ reasoning: onDelta.reasoning, acc: onDelta.acc, usage }); turn.cur = turn.variants.length - 1; renderTurnContent(turn); }
+      else renderStream(turn.el, onDelta.reasoning, onDelta.acc);
+    } else {
+      turn.el.classList.add('err');
+      turn.el.textContent = '重新生成失败：' + ex.message;
+    }
+  } finally {
+    busy = false; ctrl = null; setUI(false); fInput.focus();
+  }
+}
+
 async function sendTTS(text) {
   const v = ttsVariant(model);
   const ref = attachments.find(a => a.kind === 'audio');
@@ -502,29 +686,41 @@ async function sendTTS(text) {
   if (v === 'design' && !desc) { toast('voicedesign 需要填写声音风格描述', false); return; }
 
   fInput.value = '';
-  messages.push({ role: 'user', content: text });
+  const turn = { kind: 'tts', user: text, text, ref: ref ? ref.dataUrl : null, desc, variants: [], cur: 0, el: null };
   bubble('user', text);
   setUI(true);
-  const asst = bubble('assistant');
-  asst.textContent = '合成中…';
+  turn.el = bubble('assistant');
+  turn.el.textContent = '合成中…';
+  turns.push(turn);
   ctrl = new AbortController();
+  await ttsRequest(turn, ctrl);
+  busy = false; ctrl = null; setUI(false); fInput.focus();
+}
 
-  // MiMo 语音协议:文本放 assistant 消息,modalities=["audio"] + audio{voice,format};
-  // voiceclone 的 audio.voice 为参考音频 dataURL,voicedesign 为风格描述。
+async function regenerateTTS(turn) {
+  if (busy) return;
+  setUI(true);
+  turn.el.innerHTML = '';
+  turn.el.textContent = '合成中…';
+  ctrl = new AbortController();
+  await ttsRequest(turn, ctrl);
+  busy = false; ctrl = null; setUI(false); fInput.focus();
+}
+
+async function ttsRequest(turn, aborter) {
+  const v = ttsVariant(model);
   const msgs = v === 'design'
-    ? [{ role: 'user', content: '请用以下声音风格朗读：' + desc }, { role: 'assistant', content: text }]
-    : [{ role: 'user', content: '请朗读以下内容' }, { role: 'assistant', content: text }];
-  // voicedesign 不接受 audio.voice(风格只走文本提示);clone 的 audio.voice 为参考音频 dataURL
-  const audio = v === 'clone' ? { format: 'mp3', voice: ref.dataUrl }
+    ? [{ role: 'user', content: '请用以下声音风格朗读：' + turn.desc }, { role: 'assistant', content: turn.text }]
+    : [{ role: 'user', content: '请朗读以下内容' }, { role: 'assistant', content: turn.text }];
+  const audio = v === 'clone' ? { format: 'mp3', voice: turn.ref }
     : v === 'design' ? { format: 'mp3' }
     : { format: 'mp3', voice: 'mimo_default' };
-
   try {
     const resp = await fetch('/api/admin/playground/chat', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + getToken(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, messages: msgs, modalities: ['audio'], audio, stream: false }),
-      signal: ctrl.signal,
+      signal: aborter.signal,
     });
     if (resp.status === 401) { clearToken(); location.href = '/login.html'; return; }
     if (!resp.ok) {
@@ -538,43 +734,48 @@ async function sendTTS(text) {
     const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
     const blob = new Blob([bytes], { type: 'audio/mpeg' });
     const url = URL.createObjectURL(blob);
-    asst.innerHTML = '';
-    const au = document.createElement('audio');
-    au.controls = true; au.src = url; au.style.width = '100%';
-    asst.appendChild(au);
-    const dl = document.createElement('a');
-    dl.href = url; dl.download = 'tts.mp3'; dl.textContent = '下载音频';
-    dl.style.cssText = 'display:inline-block;margin-top:.3rem;font-size:.72rem;color:var(--primary,#3e7bfa)';
-    asst.appendChild(dl);
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    meta.textContent = `TTS 合成完成 · ${(blob.size / 1024).toFixed(0)} KB`;
-    asst.appendChild(meta);
-    chatLog.scrollTop = chatLog.scrollHeight;
+    turn.variants.push({ url, size: blob.size });
+    turn.cur = turn.variants.length - 1;
+    renderTTSContent(turn);
   } catch (ex) {
-    if (ex.name === 'AbortError') asst.textContent = '（已停止）';
-    else { asst.classList.add('err'); asst.textContent = '合成失败：' + ex.message; }
-  } finally {
-    busy = false; ctrl = null; setUI(false); fInput.focus();
+    if (ex.name === 'AbortError') { turn.el.textContent = '（已停止）'; }
+    else { turn.el.classList.add('err'); turn.el.textContent = '合成失败：' + ex.message; }
   }
 }
 
-// ASR:multipart {model,file} 转写,回填识别文本
 async function sendASR(audioAtt) {
   fInput.value = '';
   setUI(true);
-  const asst = bubble('assistant');
-  asst.textContent = '转写中…';
+  const turn = { kind: 'asr', file: audioAtt.file, name: audioAtt.name, variants: [{ acc: '转写中…' }], cur: 0, el: null };
+  const ub = bubble('user');
+  ub.textContent = '〔音频转写〕' + audioAtt.name;
+  turn.el = bubble('assistant');
+  turn.el.textContent = '转写中…';
+  turns.push(turn);
   ctrl = new AbortController();
+  await asrRequest(turn, ctrl);
+  busy = false; ctrl = null; setUI(false); fInput.focus();
+}
+
+async function regenerateASR(turn) {
+  if (busy) return;
+  setUI(true);
+  turn.el.textContent = '转写中…';
+  ctrl = new AbortController();
+  await asrRequest(turn, ctrl);
+  busy = false; ctrl = null; setUI(false); fInput.focus();
+}
+
+async function asrRequest(turn, aborter) {
   try {
     const fd = new FormData();
     fd.append('model', model);
-    fd.append('file', audioAtt.file, audioAtt.name);
+    fd.append('file', turn.file, turn.name);
     const resp = await fetch('/api/admin/playground/audio/transcriptions', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + getToken() },
       body: fd,
-      signal: ctrl.signal,
+      signal: aborter.signal,
     });
     if (resp.status === 401) { clearToken(); location.href = '/login.html'; return; }
     if (!resp.ok) {
@@ -582,25 +783,78 @@ async function sendASR(audioAtt) {
       throw new Error(extractErr(d, resp));
     }
     const d = await resp.json();
-    asst.textContent = d.text || '（无转写结果）';
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    meta.textContent = `ASR 转写 · ${(audioAtt.file.size / 1024).toFixed(0)} KB 音频`;
-    asst.appendChild(meta);
-    chatLog.scrollTop = chatLog.scrollHeight;
+    turn.variants = [{ acc: d.text || '（无转写结果）' }];
+    turn.cur = 0;
+    renderTurnContent(turn);
   } catch (ex) {
-    if (ex.name === 'AbortError') asst.textContent = '（已停止）';
-    else { asst.classList.add('err'); asst.textContent = '转写失败：' + ex.message; }
-  } finally {
-    busy = false; ctrl = null; setUI(false); fInput.focus();
+    if (ex.name === 'AbortError') { turn.el.textContent = '（已停止）'; }
+    else { turn.el.classList.add('err'); turn.el.textContent = '转写失败：' + ex.message; }
   }
 }
 
-btnSend.addEventListener('click', send);
-btnStop.addEventListener('click', () => ctrl && ctrl.abort());
+function loadTpls() {
+  try { return JSON.parse(localStorage.getItem(TPL_KEY) || '[]'); } catch (_) { return []; }
+}
+function saveTpls(a) { try { localStorage.setItem(TPL_KEY, JSON.stringify(a)); } catch (_) {} }
+function refreshTplSelect() {
+  const tpls = loadTpls();
+  tplSelect.innerHTML = '<option value="">选择模板…（打字时也会自动联想）</option>' +
+    tpls.map((t, i) => `<option value="${i}">${esc(t.length > 40 ? t.slice(0, 40) + '…' : t)}</option>`).join('');
+}
+tplSelect.addEventListener('change', () => {
+  const tpls = loadTpls();
+  if (tplSelect.value !== '' && tpls[+tplSelect.value] != null) {
+    fInput.value = tpls[+tplSelect.value];
+    fInput.dispatchEvent(new Event('input'));
+    fInput.focus();
+  }
+  tplSelect.value = '';
+});
+document.getElementById('btnTplSave').addEventListener('click', () => {
+  const text = fInput.value.trim();
+  if (!text) { toast('输入框为空，没有可保存的模板', false); return; }
+  const tpls = loadTpls();
+  if (tpls.includes(text)) { toast('该模板已存在'); return; }
+  tpls.push(text); saveTpls(tpls); refreshTplSelect();
+  toast('已保存模板（共 ' + tpls.length + ' 个）');
+});
+function hideTplMenu() { toggleMenu(tplMenu, false); }
+function renderTplSuggestions() {
+  const tpls = loadTpls();
+  const q = fInput.value.trim();
+  const matches = q ? tpls.filter(t => t.includes(q) && t !== q) : [];
+  if (!matches.length) { toggleMenu(tplMenu, false); return; }
+  tplMenu.innerHTML = matches.map(t =>
+    `<button type="button" data-t="${esc(t)}"><span class="name">${esc(t)}</span><span class="del" data-del="${esc(t)}" title="删除模板">✕</span></button>`).join('');
+  toggleMenu(tplMenu, true);
+  tplMenu.querySelectorAll('button[data-t]').forEach(b => {
+    b.addEventListener('click', e => {
+      if (e.target.closest('.del')) return;
+      fInput.value = b.dataset.t;
+      fInput.dispatchEvent(new Event('input'));
+      hideTplMenu();
+    });
+  });
+  tplMenu.querySelectorAll('.del').forEach(d => {
+    d.addEventListener('click', e => {
+      e.stopPropagation();
+      const t = d.dataset.del;
+      saveTpls(loadTpls().filter(x => x !== t));
+      refreshTplSelect();
+      renderTplSuggestions();
+      toast('已删除模板');
+    });
+  });
+}
+fInput.addEventListener('input', () => {
+  fInput.style.height = 'auto';
+  fInput.style.height = Math.min(fInput.scrollHeight, 144) + 'px';
+  renderTplSuggestions();
+});
+
 btnClear.addEventListener('click', () => {
   if (busy) ctrl && ctrl.abort();
-  messages = [];
+  turns = [];
   setCtx(null);
   chatLog.innerHTML = '<div class="has-text-grey is-size-7" style="margin:auto">选个模型，发一句话试试</div>';
 });
@@ -611,12 +865,9 @@ btnSys.addEventListener('click', () => {
 fInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
-fInput.addEventListener('input', () => {
-  fInput.style.height = 'auto';
-  fInput.style.height = Math.min(fInput.scrollHeight, 144) + 'px';
-});
 
 loadModels();
+refreshTplSelect();
 fInput.focus();
 </script>
 </body>
