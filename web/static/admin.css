@@ -30,6 +30,9 @@
 .mnav-close:hover{color:#4a4a68}
 /* Bulma 弹窗默认 z-index 40,低于顶栏的 60,手机端弹窗顶部会被顶栏盖住,提到顶栏之上 */
 
+/* 弹窗背景模糊:配合固定顶栏/弹窗层级使用 */
+.modal-background{backdrop-filter:blur(3px)}
+
 /* 药丸形小按钮(对话测试/日志钻取的返回、加载更多、系统提示等) */
 .chip-btn{border:1px solid var(--line,#e8eaf0);background:var(--card,#fff);color:var(--text,#1f2430);
   border-radius:999px;padding:.25rem .75rem;font-size:.78rem;cursor:pointer;

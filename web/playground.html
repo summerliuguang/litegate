@@ -34,12 +34,12 @@
   .var-nav button:disabled{opacity:.35;cursor:default}
   .chat-top{display:flex;align-items:center;gap:.5rem;margin-bottom:.6rem}
   .chip-btn{border:1px solid var(--line,#e8eaf0);background:var(--card,#fff);color:var(--text,#1f2430);
-    border-radius:999px;padding:.25rem .75rem;font-size:.78rem;cursor:pointer;
+    border-radius:999px;padding:.25rem .75rem;font-size:.78rem;cursor:pointer;max-width:70%;
     transition:background-color .18s ease,border-color .18s ease}
   .chip-btn:hover{border-color:#c9cfdd;background:var(--primary-weak,#eef3ff)}
   .chip-btn.on{background:var(--primary-weak,#eef3ff);border-color:var(--primary,#3e7bfa);color:var(--primary,#3e7bfa)}
-  #sysRow,#voiceDescRow{margin:-.3rem 0 .6rem;display:none}
-  #sysRow.open,#voiceDescRow.open{display:block}
+  #chipSys{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #voiceDescRow{margin:-.2rem 0 .6rem}
   #attachRow{display:flex;flex-wrap:wrap;gap:.4rem;margin:.6rem 0 0}
   #attachRow:empty{display:none}
   .att-chip{display:inline-flex;align-items:center;gap:.4rem;border:1px solid var(--line,#e8eaf0);
@@ -84,8 +84,6 @@
   .pop-menu .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .pop-menu .kind{flex:none;color:var(--muted,#a0a0b8);font-size:.66rem;
     border:1px solid var(--line,#e8eaf0);border-radius:999px;padding:0 .4rem}
-  .pop-menu .del{flex:none;border:none;background:none;color:#9898ac;font-size:.85rem;padding:0 .2rem}
-  .pop-menu .del:hover{color:#c0392b}
   .mini-player{display:flex;align-items:center;gap:.5rem;width:100%;min-width:0;margin:.2rem 0}
   .mini-player .pp{width:30px;height:30px;border-radius:999px;border:none;background:var(--primary,#3e7bfa);
     color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;flex:none;
@@ -96,6 +94,18 @@
   .mini-player .bar .fill{position:absolute;left:0;top:0;bottom:0;width:0;
     background:var(--primary,#3e7bfa);border-radius:999px}
   .mini-player .tm{font-size:.66rem;color:var(--muted,#8a90a0);flex:none;font-variant-numeric:tabular-nums}
+  /* 系统提示卡片里的模板列表 */
+  .tpl-item{display:flex;align-items:flex-start;gap:.5rem;padding:.45rem .55rem;border-radius:10px;
+    cursor:pointer;transition:background-color .18s ease}
+  .tpl-item:hover{background:var(--primary-weak,#eef3ff)}
+  .tpl-item.cur{background:var(--primary-weak,#eef3ff)}
+  .tpl-item .t-name{font-size:.8rem;font-weight:600;color:var(--text,#1f2430)}
+  .tpl-item .t-text{font-size:.72rem;color:var(--muted,#8a90a0);overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap;margin-top:.1rem}
+  .tpl-item .t-info{flex:1;min-width:0;overflow:hidden}
+  .tpl-item .del{flex:none;border:none;background:none;color:#9898ac;font-size:.9rem;
+    cursor:pointer;padding:0 .2rem}
+  .tpl-item .del:hover{color:#c0392b}
   @media (max-width:768px){
     #chatLog{height:44vh}
     .msg{max-width:92%}
@@ -112,27 +122,17 @@
   </p>
 
   <div class="chat-top">
-    <button class="chip-btn" id="btnSys">系统提示</button>
+    <button class="chip-btn" id="btnSys" title="编辑系统提示 / 模板">系统提示</button>
     <span style="flex:1"></span>
     <button class="chip-btn" id="btnClear">清空对话</button>
   </div>
-  <div id="sysRow">
-    <input class="input is-small" id="fSystem" placeholder="系统提示（可选，仅对本次对话生效），例如：你是一个简洁的助手">
-  </div>
-  <div id="voiceDescRow">
+  <div id="voiceDescRow" style="display:none">
     <input class="input is-small" id="fVoiceDesc" placeholder="声音风格描述（voicedesign 必填），例如：温柔的年轻女声，语速平缓">
   </div>
 
   <div id="chatLog"><div class="has-text-grey is-size-7" style="margin:auto">选个模型，发一句话试试</div></div>
 
   <div id="attachRow"></div>
-
-  <div class="tpl-row">
-    <select class="input is-small" id="tplSelect" style="flex:1;min-width:0">
-      <option value="">选择模板…（打字时也会自动联想）</option>
-    </select>
-    <button class="chip-btn" id="btnTplSave" title="把当前输入保存为模板">存为模板</button>
-  </div>
 
   <div class="composer">
     <textarea id="fInput" rows="1" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
@@ -168,7 +168,31 @@
         accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.json,.csv,.log,.xml,.yaml,.yml,.py,.js,.ts,.go,.html,.css,.sql,.sh">
     </div>
     <div class="pop-menu" id="modelMenu"></div>
-    <div class="pop-menu" id="tplMenu"></div>
+  </div>
+</div>
+
+<!-- 系统提示卡片:编辑/保存模板/选择模板,背景模糊盖住页面 -->
+<div class="modal" id="sysModal">
+  <div class="modal-background"></div>
+  <div class="modal-card">
+    <header class="modal-card-head"><p class="modal-card-title">系统提示</p>
+      <button class="delete" id="sysClose" aria-label="close"></button></header>
+    <section class="modal-card-body">
+      <label class="label is-size-7">提示词内容（仅对本次对话生效）</label>
+      <textarea id="fSystem" class="textarea is-small" rows="6"
+        placeholder="例如：你是一个简洁的助手，回答控制在三句话以内"></textarea>
+      <div style="display:flex;gap:.4rem;align-items:center;margin:.5rem 0 .2rem">
+        <input id="tplName" class="input is-small" placeholder="模板名字" style="flex:1;min-width:0">
+        <button class="chip-btn" id="btnTplSave">保存为模板</button>
+      </div>
+      <label class="label is-size-7" style="margin-top:.7rem">已保存的模板</label>
+      <input id="tplSearch" class="input is-small" placeholder="搜索模板（名字/内容）" style="margin:.2rem 0 .4rem">
+      <div id="tplList"><div class="has-text-grey is-size-7">暂无模板</div></div>
+    </section>
+    <footer class="modal-card-foot">
+      <button class="button is-link is-small" id="sysApply">采用并关闭</button>
+      <button class="button is-small" id="sysClearPrompt">清空提示词</button>
+    </footer>
   </div>
 </div>
 <div id="toast" class="toast"></div>
@@ -184,7 +208,6 @@ const btnSend = document.getElementById('btnSend');
 const btnStop = document.getElementById('btnStop');
 const btnClear = document.getElementById('btnClear');
 const btnSys = document.getElementById('btnSys');
-const sysRow = document.getElementById('sysRow');
 const voiceDescRow = document.getElementById('voiceDescRow');
 const fVoiceDesc = document.getElementById('fVoiceDesc');
 const btnAttach = document.getElementById('btnAttach');
@@ -193,20 +216,24 @@ const attachRow = document.getElementById('attachRow');
 const modelChip = document.getElementById('modelChip');
 const chipName = document.getElementById('chipName');
 const modelMenu = document.getElementById('modelMenu');
-const tplMenu = document.getElementById('tplMenu');
-const tplSelect = document.getElementById('tplSelect');
 const ctxInfo = document.getElementById('ctxInfo');
+const sysModal = document.getElementById('sysModal');
+const tplName = document.getElementById('tplName');
+const tplSearch = document.getElementById('tplSearch');
+const tplList = document.getElementById('tplList');
 
 let models = [];
 let model = '';
-let turns = [];        // 每轮对话:{user, variants:[{reasoning,acc,url?,size?,usage?}], cur, el, kind, text/ref/desc/file/name}
-let attachments = [];  // {name, kind:'image'|'text'|'audio', dataUrl?, text?, file?}
+let turns = [];        // 每轮:{user, variants:[{reasoning,acc,url?,size?,usage?}], cur, el, kind, text/ref/desc/file/name}
+let attachments = [];
 let busy = false;
 let ctrl = null;
+let appliedTplName = ''; // 已采用的系统提示模板名(显示在主页"系统提示"旁)
 
 const IMG_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 const TEXT_EXT = /\.(txt|md|json|csv|log|xml|ya?ml|py|js|ts|go|html|css|sql|sh)$/i;
-const TPL_KEY = 'litegate.playground.templates';
+const SYS_TPL_KEY = 'litegate.playground.sysTemplates';
+const OLD_TPL_KEY = 'litegate.playground.templates';
 
 const KIND_LABEL = { chat: '语言', omni: '多模态', asr: '语音转写', tts: '语音合成' };
 function kindOf(m) {
@@ -221,6 +248,29 @@ function ttsVariant(m) {
   return 'base';
 }
 
+// ===== 系统提示模板(带名字,存 localStorage;旧格式字符串数组自动迁移) =====
+function loadSysTpls() {
+  try {
+    const cur = JSON.parse(localStorage.getItem(SYS_TPL_KEY) || 'null');
+    if (Array.isArray(cur)) return cur.filter(t => t && t.name && t.text != null);
+  } catch (_) {}
+  try {
+    const old = JSON.parse(localStorage.getItem(OLD_TPL_KEY) || '[]');
+    if (Array.isArray(old) && old.length && typeof old[0] === 'string') {
+      const mig = old.map((t, i) => ({ name: '模板' + (i + 1), text: t }));
+      saveSysTpls(mig);
+      return mig;
+    }
+  } catch (_) {}
+  return [];
+}
+function saveSysTpls(a) { try { localStorage.setItem(SYS_TPL_KEY, JSON.stringify(a)); } catch (_) {} }
+function updateSysChip() {
+  btnSys.textContent = appliedTplName ? '系统提示 · ' + appliedTplName : '系统提示';
+  btnSys.classList.toggle('on', !!fSystem.value.trim());
+}
+
+// ===== 模型 =====
 async function loadModels() {
   try {
     const d = await api('/api/admin/playground/models');
@@ -260,7 +310,6 @@ function toggleMenu(menu, open) {
 modelChip.addEventListener('click', e => { e.stopPropagation(); toggleMenu(modelMenu); });
 document.addEventListener('click', e => {
   if (!e.target.closest('.model-menu') && !e.target.closest('.model-chip')) toggleMenu(modelMenu, false);
-  if (!e.target.closest('#tplMenu') && !e.target.closest('#tplSelect') && !e.target.closest('#fInput')) toggleMenu(tplMenu, false);
 });
 
 function applyKind() {
@@ -348,11 +397,12 @@ function setCtx(tokens) {
   ctxInfo.textContent = tokens == null ? '—' : fmtTok(tokens);
 }
 
-function bubble(cls) {
+function bubble(cls, text) {
   const ph = chatLog.querySelector('div.has-text-grey');
   if (ph) ph.remove();
   const el = document.createElement('div');
   el.className = 'msg ' + cls;
+  if (text != null) el.textContent = text;
   chatLog.appendChild(el);
   chatLog.scrollTop = chatLog.scrollHeight;
   return el;
@@ -522,8 +572,7 @@ function buildMiniPlayer(url) {
 
 function buildMsgs(skipLastAssistant) {
   const msgs = [];
-  const sys = fSystem.value.trim();
-  if (sys) msgs.push({ role: 'system', content: sys });
+  if (fSystem.value.trim()) msgs.push({ role: 'system', content: fSystem.value.trim() });
   turns.forEach((t, i) => {
     msgs.push({ role: 'user', content: t.user });
     const skip = skipLastAssistant && i === turns.length - 1;
@@ -591,14 +640,12 @@ async function send() {
   const text = fInput.value.trim();
   if (k === 'tts') {
     if (!text) { toast('请输入要合成的文本', false); return; }
-    hideTplMenu();
     await sendTTS(text);
     return;
   }
   if (k === 'asr') {
     const audio = attachments.find(a => a.kind === 'audio');
     if (!audio) { toast('请先通过 ＋ 附加音频文件（wav/mp3）', false); return; }
-    hideTplMenu();
     await sendASR(audio);
     return;
   }
@@ -606,7 +653,6 @@ async function send() {
   if (!model) { toast('没有可用的模型', false); return; }
   fInput.value = '';
   fInput.style.height = 'auto';
-  hideTplMenu();
   const userContent = buildContent(text);
 
   const turn = { kind: k, user: userContent, variants: [], cur: 0, el: null };
@@ -747,8 +793,7 @@ async function sendASR(audioAtt) {
   fInput.value = '';
   setUI(true);
   const turn = { kind: 'asr', file: audioAtt.file, name: audioAtt.name, variants: [{ acc: '转写中…' }], cur: 0, el: null };
-  const ub = bubble('user');
-  ub.textContent = '〔音频转写〕' + audioAtt.name;
+  bubble('user', '〔音频转写〕' + audioAtt.name);
   turn.el = bubble('assistant');
   turn.el.textContent = '转写中…';
   turns.push(turn);
@@ -792,82 +837,97 @@ async function asrRequest(turn, aborter) {
   }
 }
 
-function loadTpls() {
-  try { return JSON.parse(localStorage.getItem(TPL_KEY) || '[]'); } catch (_) { return []; }
+// ===== 系统提示卡片 =====
+function openSysModal() {
+  tplName.value = appliedTplName;
+  tplSearch.value = '';
+  renderTplList('');
+  sysModal.classList.add('is-active');
+  fSystem.focus();
 }
-function saveTpls(a) { try { localStorage.setItem(TPL_KEY, JSON.stringify(a)); } catch (_) {} }
-function refreshTplSelect() {
-  const tpls = loadTpls();
-  tplSelect.innerHTML = '<option value="">选择模板…（打字时也会自动联想）</option>' +
-    tpls.map((t, i) => `<option value="${i}">${esc(t.length > 40 ? t.slice(0, 40) + '…' : t)}</option>`).join('');
-}
-tplSelect.addEventListener('change', () => {
-  const tpls = loadTpls();
-  if (tplSelect.value !== '' && tpls[+tplSelect.value] != null) {
-    fInput.value = tpls[+tplSelect.value];
-    fInput.dispatchEvent(new Event('input'));
-    fInput.focus();
-  }
-  tplSelect.value = '';
-});
-document.getElementById('btnTplSave').addEventListener('click', () => {
-  const text = fInput.value.trim();
-  if (!text) { toast('输入框为空，没有可保存的模板', false); return; }
-  const tpls = loadTpls();
-  if (tpls.includes(text)) { toast('该模板已存在'); return; }
-  tpls.push(text); saveTpls(tpls); refreshTplSelect();
-  toast('已保存模板（共 ' + tpls.length + ' 个）');
-});
-function hideTplMenu() { toggleMenu(tplMenu, false); }
-function renderTplSuggestions() {
-  const tpls = loadTpls();
-  const q = fInput.value.trim();
-  const matches = q ? tpls.filter(t => t.includes(q) && t !== q) : [];
-  if (!matches.length) { toggleMenu(tplMenu, false); return; }
-  tplMenu.innerHTML = matches.map(t =>
-    `<button type="button" data-t="${esc(t)}"><span class="name">${esc(t)}</span><span class="del" data-del="${esc(t)}" title="删除模板">✕</span></button>`).join('');
-  toggleMenu(tplMenu, true);
-  tplMenu.querySelectorAll('button[data-t]').forEach(b => {
-    b.addEventListener('click', e => {
-      if (e.target.closest('.del')) return;
-      fInput.value = b.dataset.t;
-      fInput.dispatchEvent(new Event('input'));
-      hideTplMenu();
-    });
-  });
-  tplMenu.querySelectorAll('.del').forEach(d => {
-    d.addEventListener('click', e => {
-      e.stopPropagation();
-      const t = d.dataset.del;
-      saveTpls(loadTpls().filter(x => x !== t));
-      refreshTplSelect();
-      renderTplSuggestions();
-      toast('已删除模板');
-    });
-  });
-}
-fInput.addEventListener('input', () => {
-  fInput.style.height = 'auto';
-  fInput.style.height = Math.min(fInput.scrollHeight, 144) + 'px';
-  renderTplSuggestions();
-});
+function closeSysModal() { sysModal.classList.remove('is-active'); }
 
+function renderTplList(filter) {
+  const tpls = loadSysTpls();
+  const f = (filter || '').toLowerCase();
+  const matches = tpls.filter(t =>
+    t.name.toLowerCase().includes(f) || t.text.toLowerCase().includes(f));
+  tplList.innerHTML = matches.length ? '' : '<div class="has-text-grey is-size-7">暂无模板</div>';
+  matches.forEach(t => {
+    const item = document.createElement('div');
+    item.className = 'tpl-item' + (t.name === appliedTplName && t.text === fSystem.value ? ' cur' : '');
+    item.innerHTML = `<div class="t-info"><div class="t-name">${esc(t.name)}</div>` +
+      `<div class="t-text">${esc(t.text)}</div></div>` +
+      `<button type="button" class="del" data-name="${esc(t.name)}" title="删除模板">✕</button>`;
+    item.addEventListener('click', () => {
+      fSystem.value = t.text;
+      tplName.value = t.name;
+      item.parentElement.querySelectorAll('.tpl-item').forEach(x => x.classList.remove('cur'));
+      item.classList.add('cur');
+    });
+    tplList.appendChild(item);
+  });
+  tplList.querySelectorAll('.del').forEach(d => d.addEventListener('click', e => {
+    e.stopPropagation();
+    const name = d.dataset.name;
+    saveSysTpls(loadSysTpls().filter(t => t.name !== name));
+    if (appliedTplName === name) appliedTplName = '';
+    updateSysChip();
+    renderTplList(tplSearch.value);
+    toast('已删除模板：' + name);
+  }));
+}
+
+document.getElementById('btnTplSave').addEventListener('click', () => {
+  const name = tplName.value.trim();
+  const text = fSystem.value.trim();
+  if (!name) { toast('请先填写模板名字', false); return; }
+  if (!text) { toast('提示词内容为空，没有可保存的内容', false); return; }
+  const tpls = loadSysTpls();
+  const exist = tpls.find(t => t.name === name);
+  if (exist) exist.text = text;
+  else tpls.push({ name, text });
+  saveSysTpls(tpls);
+  appliedTplName = name;
+  updateSysChip();
+  renderTplList(tplSearch.value);
+  toast(exist ? '已覆盖模板：' + name : '已保存模板：' + name);
+});
+tplSearch.addEventListener('input', () => renderTplList(tplSearch.value));
+document.getElementById('sysApply').addEventListener('click', () => {
+  appliedTplName = tplName.value.trim();
+  updateSysChip();
+  closeSysModal();
+  toast('系统提示已更新');
+});
+document.getElementById('sysClearPrompt').addEventListener('click', () => {
+  fSystem.value = '';
+  appliedTplName = '';
+  tplName.value = '';
+  updateSysChip();
+  renderTplList(tplSearch.value);
+});
+btnSys.addEventListener('click', openSysModal);
+document.getElementById('sysClose').addEventListener('click', closeSysModal);
+document.querySelector('#sysModal .modal-background').addEventListener('click', closeSysModal);
+
+// ===== 清空 =====
 btnClear.addEventListener('click', () => {
   if (busy) ctrl && ctrl.abort();
   turns = [];
   setCtx(null);
   chatLog.innerHTML = '<div class="has-text-grey is-size-7" style="margin:auto">选个模型，发一句话试试</div>';
 });
-btnSys.addEventListener('click', () => {
-  sysRow.classList.toggle('open');
-  btnSys.classList.toggle('on', sysRow.classList.contains('open'));
-});
 fInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
+fInput.addEventListener('input', () => {
+  fInput.style.height = 'auto';
+  fInput.style.height = Math.min(fInput.scrollHeight, 144) + 'px';
+});
 
 loadModels();
-refreshTplSelect();
+updateSysChip();
 fInput.focus();
 </script>
 </body>
