@@ -22,20 +22,23 @@ const (
 )
 
 type keyHealthManager struct {
-	mu    sync.Mutex
-	fails map[string]int
-	until map[string]time.Time
+	mu     sync.Mutex
+	alerts *alertManager
+	fails  map[string]int
+	until  map[string]time.Time
 }
 
 func khKey(channelID, keyID int64) string { return fmt.Sprintf("%d/%d", channelID, keyID) }
 
-func newKeyHealthManager() *keyHealthManager {
-	return &keyHealthManager{fails: map[string]int{}, until: map[string]time.Time{}}
+func newKeyHealthManager(alerts *alertManager) *keyHealthManager {
+	return &keyHealthManager{alerts: alerts, fails: map[string]int{}, until: map[string]time.Time{}}
 }
 
-func (m *keyHealthManager) reportFailure(channelID, keyID int64) {
+// reportFailure 记录一次失败并按需进入冷却。label 为「渠道名 + 打码密钥」的
+// 展示文案（首次进入冷却时随告警推送；测试调用传空串跳过告警）。
+func (m *keyHealthManager) reportFailure(channelID, keyID int64, label string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	var cooling time.Duration
 	id := khKey(channelID, keyID)
 	m.fails[id]++
 	n := m.fails[id]
@@ -47,7 +50,15 @@ func (m *keyHealthManager) reportFailure(channelID, keyID int64) {
 		if d > keyCooldownMax {
 			d = keyCooldownMax
 		}
+		_, wasCooling := m.until[id]
+		if !wasCooling {
+			cooling = d // 首次进入冷却才告警，续期不打扰
+		}
 		m.until[id] = time.Now().Add(d)
+	}
+	m.mu.Unlock()
+	if cooling > 0 && label != "" && m.alerts != nil {
+		m.alerts.fireKeyCooldown(label, cooling)
 	}
 }
 

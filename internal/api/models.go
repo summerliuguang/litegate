@@ -42,6 +42,10 @@ func (p *proxy) serveModels(w http.ResponseWriter, r *http.Request) {
 		}
 		data = filtered
 	}
+	// 配置了 auto 路由的密钥暴露 auto 伪模型，客户端可直接 model="auto" 调用
+	if autoModes[ak.AutoMode] {
+		data = append(data, modelItem{ID: autoModelName, Object: "model", OwnedBy: "litegate"})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
 }
 

@@ -24,19 +24,21 @@ type windowUse struct {
 }
 
 type keyAdmission struct {
-	mu    sync.Mutex
-	rpm   map[int64][]time.Time
-	tpm   map[int64][]tokPoint
-	day   map[int64]*windowUse
-	month map[int64]*windowUse
+	mu     sync.Mutex
+	alerts *alertManager
+	rpm    map[int64][]time.Time
+	tpm    map[int64][]tokPoint
+	day    map[int64]*windowUse
+	month  map[int64]*windowUse
 }
 
-func newKeyAdmission() *keyAdmission {
+func newKeyAdmission(alerts *alertManager) *keyAdmission {
 	return &keyAdmission{
-		rpm:   map[int64][]time.Time{},
-		tpm:   map[int64][]tokPoint{},
-		day:   map[int64]*windowUse{},
-		month: map[int64]*windowUse{},
+		alerts: alerts,
+		rpm:    map[int64][]time.Time{},
+		tpm:    map[int64][]tokPoint{},
+		day:    map[int64]*windowUse{},
+		month:  map[int64]*windowUse{},
 	}
 }
 
@@ -96,9 +98,15 @@ func (a *keyAdmission) admit(ak *store.APIKey) (int, string) {
 	}
 	if ak.BudgetUSD > 0 || ak.BudgetTokens > 0 {
 		use := a.budgetWindow(ak)
-		if ak.BudgetUSD > 0 && use.cost >= ak.BudgetUSD {
-			return 429, "budget exhausted: " + ak.BudgetPeriod + " budget $" +
-				formatUSD(ak.BudgetUSD) + " reached for this api key"
+		if ak.BudgetUSD > 0 {
+			// 预算越过告警线（含耗尽）时推送告警；fireBudget 内部做窗口去重
+			if a.alerts != nil {
+				a.alerts.fireBudget(ak.ID, ak.Name, use.label, ak.BudgetUSD, use.cost, use.cost >= ak.BudgetUSD)
+			}
+			if use.cost >= ak.BudgetUSD {
+				return 429, "budget exhausted: " + ak.BudgetPeriod + " budget $" +
+					formatUSD(ak.BudgetUSD) + " reached for this api key"
+			}
 		}
 		if ak.BudgetTokens > 0 && use.tokens >= ak.BudgetTokens {
 			return 429, "budget exhausted: " + ak.BudgetPeriod + " token budget reached for this api key"

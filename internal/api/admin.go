@@ -23,10 +23,11 @@ type admin struct {
 	// （渠道或模型变更、价格变更时调用，漏调会导致最长 60 秒脏数据）。
 	invalidateModels func()
 	invalidatePrices func()
+	alerts           *alertManager
 
 	mu       sync.Mutex
 	sessions map[string]time.Time
-	failures map[string]int     // 来源 IP → 连续登录失败次数
+	failures map[string]int       // 来源 IP → 连续登录失败次数
 	locked   map[string]time.Time // 来源 IP → 锁定截止时间
 }
 
@@ -42,6 +43,10 @@ func (a *admin) register(mux *http.ServeMux) {
 	mux.Handle("PUT /api/admin/channels/{id}", a.auth(a.updateChannel))
 	mux.Handle("DELETE /api/admin/channels/{id}", a.auth(a.deleteChannel))
 	mux.Handle("POST /api/admin/channels/{id}/test", a.auth(a.testChannel))
+	mux.Handle("POST /api/admin/channels/{id}/balance", a.auth(a.channelBalances))
+	mux.Handle("GET /api/admin/alerts", a.auth(a.getAlerts))
+	mux.Handle("PUT /api/admin/alerts", a.auth(a.putAlerts))
+	mux.Handle("POST /api/admin/alerts/test", a.auth(a.testAlert))
 	mux.Handle("POST /api/admin/channels/{id}/keys/{key_id}/enable", a.auth(a.enableChannelKey))
 	mux.Handle("POST /api/admin/channels/{id}/keys/{key_id}/disable", a.auth(a.disableChannelKey))
 	mux.Handle("POST /api/admin/channels/{id}/models/disable/{model...}", a.auth(a.disableChannelModel))
@@ -198,23 +203,26 @@ func (a *admin) dashboard(w http.ResponseWriter, _ *http.Request) {
 // ---- 渠道管理 ----
 
 type channelIn struct {
-	Name    string   `json:"name"`
-	Type    string   `json:"type"`
-	BaseURL string   `json:"base_url"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	BaseURL string `json:"base_url"`
 	// APIKeys 是渠道的上游密钥列表（明文），保存时加密。create 必填（可空串）；
 	// update 传 nil 表示密钥不动，传数组（含空数组）表示全量替换（启停状态按密钥保留）。
 	APIKeys []string `json:"api_keys"`
 	// APIKey 是旧版单密钥字段的兼容入口：仅当 api_keys 未传且 api_key 非空时生效。
-	APIKey  string            `json:"api_key"`
-	Models  []string          `json:"models"`
+	APIKey string   `json:"api_key"`
+	Models []string `json:"models"`
 	// DisabledModels 可选：显式指定禁用列表（批量导入场景全量替换）。
 	// 不传（nil）时按"移出启用列表即禁用"的规则自动推导。
-	DisabledModels *[]string        `json:"disabled_models"`
+	DisabledModels *[]string         `json:"disabled_models"`
 	ModelMap       map[string]string `json:"model_map"` // 模型映射：对外名 → 上游真实名
 	Weight         int               `json:"weight"`
 	Priority       int               `json:"priority"`
 	Enabled        *bool             `json:"enabled"`
 	Remark         string            `json:"remark"`
+	// 余额探测：BalanceAPI 为 '' / deepseek / openrouter；阈值按余额币种数值比较，0 = 不告警
+	BalanceAPI        string  `json:"balance_api"`
+	BalanceAlertBelow float64 `json:"balance_alert_below"`
 }
 
 func (in *channelIn) validate() string {
@@ -226,6 +234,9 @@ func (in *channelIn) validate() string {
 	}
 	if in.BaseURL == "" {
 		return "base_url is required"
+	}
+	if !balanceAPIs[in.BalanceAPI] {
+		return "balance_api must be empty, deepseek or openrouter"
 	}
 	return ""
 }
@@ -246,19 +257,21 @@ func (in *channelIn) keyInputs() []string {
 
 // channelOut 是渠道的对外视图：密钥只回打码值，避免明文回显。
 type channelOut struct {
-	ID             int64               `json:"id"`
-	Name           string              `json:"name"`
-	Type           string              `json:"type"`
-	BaseURL        string              `json:"base_url"`
-	APIKeys        []store.ChannelKey  `json:"api_keys"`
-	Models         []string            `json:"models"`
-	DisabledModels []string            `json:"disabled_models"`
-	ModelMap       map[string]string   `json:"model_map"`
-	Weight         int                 `json:"weight"`
-	Priority       int                 `json:"priority"`
-	Enabled        bool                `json:"enabled"`
-	Remark         string              `json:"remark"`
-	CreatedAt      string              `json:"created_at"`
+	ID                int64              `json:"id"`
+	Name              string             `json:"name"`
+	Type              string             `json:"type"`
+	BaseURL           string             `json:"base_url"`
+	APIKeys           []store.ChannelKey `json:"api_keys"`
+	Models            []string           `json:"models"`
+	DisabledModels    []string           `json:"disabled_models"`
+	ModelMap          map[string]string  `json:"model_map"`
+	Weight            int                `json:"weight"`
+	Priority          int                `json:"priority"`
+	Enabled           bool               `json:"enabled"`
+	Remark            string             `json:"remark"`
+	CreatedAt         string             `json:"created_at"`
+	BalanceAPI        string             `json:"balance_api"`
+	BalanceAlertBelow float64            `json:"balance_alert_below"`
 }
 
 func maskChannel(c *store.Channel) channelOut {
@@ -271,6 +284,7 @@ func maskChannel(c *store.Channel) channelOut {
 		APIKeys: keys, Models: c.Models, DisabledModels: c.DisabledModels,
 		ModelMap: c.ModelMap, Weight: c.Weight, Priority: c.Priority, Enabled: c.Enabled,
 		Remark: c.Remark, CreatedAt: c.CreatedAt,
+		BalanceAPI: c.BalanceAPI, BalanceAlertBelow: c.BalanceAlertBelow,
 	}
 }
 
@@ -313,6 +327,7 @@ func (a *admin) createChannel(w http.ResponseWriter, r *http.Request) {
 		Models: in.Models, DisabledModels: disabled, ModelMap: in.ModelMap,
 		Weight: in.Weight, Priority: in.Priority,
 		Enabled: enabled, Remark: in.Remark,
+		BalanceAPI: in.BalanceAPI, BalanceAlertBelow: in.BalanceAlertBelow,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -377,6 +392,7 @@ func (a *admin) updateChannel(w http.ResponseWriter, r *http.Request) {
 		Models: in.Models, DisabledModels: newDisabled, ModelMap: in.ModelMap,
 		Weight: in.Weight, Priority: in.Priority,
 		Enabled: enabled, Remark: in.Remark, CreatedAt: old.CreatedAt,
+		BalanceAPI: in.BalanceAPI, BalanceAlertBelow: in.BalanceAlertBelow,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -514,9 +530,13 @@ type apiKeyOut struct {
 	BudgetUSD     float64  `json:"budget_usd"`
 	BudgetPeriod  string   `json:"budget_period"`
 	BudgetTokens  int64    `json:"budget_tokens"`
+	// auto 路由配置（模型名传 "auto" 时生效）
+	AutoMode     string   `json:"auto_mode"`
+	AutoModels   []string `json:"auto_models"`
+	AutoPriority []string `json:"auto_priority"`
 	// 近 7 天输出速度统计（成功且可计算的请求）
-	AvgTps       float64 `json:"avg_tps"`
-	RecentReqs   int64   `json:"recent_requests"`
+	AvgTps     float64 `json:"avg_tps"`
+	RecentReqs int64   `json:"recent_requests"`
 }
 
 func (a *admin) listKeys(w http.ResponseWriter, _ *http.Request) {
@@ -543,6 +563,7 @@ func (a *admin) listKeys(w http.ResponseWriter, _ *http.Request) {
 			AllowedModels: k.AllowedModels, Enabled: k.Enabled, CreatedAt: k.CreatedAt,
 			ExpiresAt: k.ExpiresAt, RPMLimit: k.RPMLimit, TPMLimit: k.TPMLimit,
 			BudgetUSD: k.BudgetUSD, BudgetPeriod: k.BudgetPeriod, BudgetTokens: k.BudgetTokens,
+			AutoMode: k.AutoMode, AutoModels: k.AutoModels, AutoPriority: k.AutoPriority,
 			AvgTps: tps, RecentReqs: recent,
 		})
 	}
@@ -570,19 +591,39 @@ type keyLimitsIn struct {
 	BudgetTokens int64   `json:"budget_tokens"`
 }
 
+// keyAutoIn 是虚拟密钥的 auto 路由配置；AutoMode 空 = 未启用。
+type keyAutoIn struct {
+	AutoMode     string   `json:"auto_mode"` // latency | balance | priority | smart
+	AutoModels   []string `json:"auto_models"`
+	AutoPriority []string `json:"auto_priority"`
+}
+
+func (in keyAutoIn) validate() string {
+	if in.AutoMode != "" && !autoModes[in.AutoMode] {
+		return "auto_mode must be one of: latency, balance, priority, smart"
+	}
+	return ""
+}
+
 func (a *admin) createKey(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name          string   `json:"name"`
 		AllowedModels []string `json:"allowed_models"`
 		keyLimitsIn
+		keyAutoIn
 	}
 	if readJSON(w, r, &req) != nil {
+		return
+	}
+	if msg := req.validate(); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 		return
 	}
 	k := &store.APIKey{
 		Name: req.Name, AllowedModels: req.AllowedModels, Enabled: true,
 		ExpiresAt: req.ExpiresAt, RPMLimit: req.RPMLimit, TPMLimit: req.TPMLimit,
 		BudgetUSD: req.BudgetUSD, BudgetPeriod: req.BudgetPeriod, BudgetTokens: req.BudgetTokens,
+		AutoMode: req.AutoMode, AutoModels: req.AutoModels, AutoPriority: req.AutoPriority,
 	}
 	if err := a.st.CreateAPIKey(k); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -591,13 +632,15 @@ func (a *admin) createKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, k)
 }
 
-// updateKey 更新密钥的名称、模型限制与治理字段（全量替换；allowed_models 留空 = 不限制）。
+// updateKey 更新密钥的名称、模型限制、治理字段与 auto 路由配置（全量替换；
+// allowed_models 留空 = 不限制，auto_mode 留空 = 关闭 auto 路由）。
 func (a *admin) updateKey(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	var req struct {
 		Name          string   `json:"name"`
 		AllowedModels []string `json:"allowed_models"`
 		keyLimitsIn
+		keyAutoIn
 	}
 	if readJSON(w, r, &req) != nil {
 		return
@@ -606,10 +649,15 @@ func (a *admin) updateKey(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
 		return
 	}
+	if msg := req.validate(); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		return
+	}
 	k := &store.APIKey{
 		ID: id, Name: req.Name, AllowedModels: req.AllowedModels,
 		ExpiresAt: req.ExpiresAt, RPMLimit: req.RPMLimit, TPMLimit: req.TPMLimit,
 		BudgetUSD: req.BudgetUSD, BudgetPeriod: req.BudgetPeriod, BudgetTokens: req.BudgetTokens,
+		AutoMode: req.AutoMode, AutoModels: req.AutoModels, AutoPriority: req.AutoPriority,
 	}
 	if err := a.st.UpdateAPIKey(k); err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})

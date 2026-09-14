@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>告警设置 - LiteGate</title>
+<link rel="stylesheet" href="/static/vendor/bulma.min.css">
+<script src="/static/theme.js"></script>
+<link rel="stylesheet" href="/static/skin.css">
+<link rel="stylesheet" href="/static/admin.css">
+</head>
+<body data-page="settings">
+<div class="wrap">
+  <h1 class="title is-4" style="margin:0 0 .3rem">告警设置</h1>
+  <p class="is-size-7 has-text-grey" style="margin:0 0 .8rem">
+    关键事件（虚拟密钥预算越线/耗尽、渠道密钥冷却、上游余额不足、近 5 分钟错误率突增）
+    通过 webhook 推送。同一事件在冷却期内不重复发送。
+  </p>
+
+  <div class="card" style="padding:1rem;max-width:640px">
+    <label class="checkbox is-size-7" style="margin-bottom:.6rem">
+      <input type="checkbox" id="aEnabled"> 启用告警推送
+    </label>
+    <div class="field"><label class="label is-size-7">Webhook 地址（POST JSON）</label>
+      <input class="input is-small mono" id="aUrl" placeholder="https://ntfy.example.com 或自建接收端"></div>
+    <div class="columns" style="margin-bottom:0">
+      <div class="column"><div class="field"><label class="label is-size-7">格式</label>
+        <div class="control select is-small is-fullwidth"><select id="aFormat">
+          <option value="json">通用 JSON（event/title/message/severity）</option>
+          <option value="ntfy">ntfy（topic + title + message）</option>
+        </select></div></div></div>
+      <div class="column"><div class="field"><label class="label is-size-7">ntfy Topic（format=ntfy 时必填）</label>
+        <input class="input is-small mono" id="aTopic" placeholder="litegate-alerts"></div></div>
+    </div>
+    <div class="columns" style="margin-bottom:0">
+      <div class="column"><div class="field"><label class="label is-size-7">预算告警线（用量百分比）</label>
+        <input class="input is-small" id="aWarn" type="number" min="1" max="99" value="80"></div></div>
+      <div class="column"><div class="field"><label class="label is-size-7">同事件冷却（分钟）</label>
+        <input class="input is-small" id="aCooldown" type="number" min="1" value="10"></div></div>
+    </div>
+    <p id="aErr" class="help is-danger" style="min-height:1.2em"></p>
+    <div class="is-flex" style="gap:.5rem;margin-top:.4rem">
+      <button class="button is-link is-small" id="aSave">保存</button>
+      <button class="button is-small" id="aTest">发送测试通知</button>
+    </div>
+    <p class="help is-size-7 has-text-grey" style="margin-top:.6rem">
+      上游余额的告警阈值在「渠道管理」里按渠道单独配置（需渠道选择余额接口）。
+    </p>
+  </div>
+</div>
+<script src="/static/common.js"></script>
+<script>
+'use strict';
+renderNav();
+
+const $ = id => document.getElementById(id);
+
+async function loadCfg() {
+  try {
+    const c = await api('/api/admin/alerts');
+    $('aEnabled').checked = !!c.enabled;
+    $('aUrl').value = c.webhook_url || '';
+    $('aFormat').value = c.format === 'ntfy' ? 'ntfy' : 'json';
+    $('aTopic').value = c.topic || '';
+    $('aWarn').value = c.budget_warn_pct || 80;
+    $('aCooldown').value = c.cooldown_min || 10;
+  } catch (ex) { toast('加载失败：' + ex.message, false); }
+}
+
+$('aSave').addEventListener('click', async () => {
+  $('aErr').textContent = '';
+  try {
+    await api('/api/admin/alerts', {
+      method: 'PUT',
+      body: JSON.stringify({
+        enabled: $('aEnabled').checked,
+        webhook_url: $('aUrl').value.trim(),
+        format: $('aFormat').value,
+        topic: $('aTopic').value.trim(),
+        budget_warn_pct: parseInt($('aWarn').value, 10) || 80,
+        cooldown_min: parseInt($('aCooldown').value, 10) || 10,
+      }),
+    });
+    toast('已保存，配置即时生效');
+  } catch (ex) { $('aErr').textContent = ex.message; }
+});
+
+$('aTest').addEventListener('click', async () => {
+  $('aErr').textContent = '';
+  try { await api('/api/admin/alerts/test', { method: 'POST' }); toast('测试通知已投递'); }
+  catch (ex) { $('aErr').textContent = ex.message; }
+});
+
+loadCfg();
+</script>
+</body>
+</html>

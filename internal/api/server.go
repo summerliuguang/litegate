@@ -25,13 +25,16 @@ func NewServer(st *store.Store, adminPassword string, webHandler http.Handler) h
 		failures: map[string]int{},
 		locked:   map[string]time.Time{},
 	}
+	alerts := newAlertManager(st)
+	a.alerts = alerts
 	a.register(mux)
 
 	p := &proxy{
 		st:     st,
 		client: newUpstreamClient(),
-		keys:   newKeyHealthManager(),
-		limits: newKeyAdmission(),
+		keys:   newKeyHealthManager(alerts),
+		limits: newKeyAdmission(alerts),
+		alerts: alerts,
 	}
 	p.limits.load(st)
 	serverProxy = p

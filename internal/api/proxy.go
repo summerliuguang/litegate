@@ -28,6 +28,15 @@ type proxy struct {
 	pc     priceCache
 	keys   *keyHealthManager
 	limits *keyAdmission
+	alerts *alertManager
+	// auto 路由状态：模型延迟统计缓存与各密钥的轮转计数器（balance 模式）
+	lat modelLatencyCache
+	rr  sync.Map // api_key_id -> *atomic.Uint64
+	aff affinityMap
+	// 近 5 分钟错误率滑动窗口（错误率突增告警用）
+	ewMu  sync.Mutex
+	ewAt  []time.Time
+	ewBad int64
 }
 
 // priceCache 缓存价格表 60s，避免每笔请求都查一次库（SQLite 是单连接串行化）。
@@ -280,10 +289,42 @@ func (p *proxy) serveBody(w http.ResponseWriter, r *http.Request, protocol, upst
 	}
 	// 停用的渠道不接流量
 	chans = enabledOnly(chans)
-	chans = filterByModel(chans, model)
-	if len(chans) == 0 {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no enabled channel serves model: " + model})
-		return
+	// auto 路由：model="auto" 时按密钥配置的策略解析候选序列；后续渠道选择/
+	// 白名单/准入/日志/计费都作用于解析后的模型。priority 模式给完整序列，
+	// dispatch 全部失败时按序跨模型故障转移。
+	var autoCands []string
+	if model == autoModelName {
+		cands, status, msg := p.autoOrdered(r.Context(), ak, protocol, chans, body)
+		if msg != "" {
+			writeJSON(w, status, map[string]string{"error": msg})
+			return
+		}
+		autoCands = cands
+		model = cands[0]
+		if len(autoCands) == 1 {
+			body = jsonSetModel(body, model)
+		}
+	}
+	if len(autoCands) == 0 {
+		chans = filterByModel(chans, model)
+		if len(chans) == 0 {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no enabled channel serves model: " + model})
+			return
+		}
+	} else {
+		// 多候选：任何一个有渠道即可放行，渠道过滤移到下方循环内按候选做
+		served := false
+		for _, cand := range autoCands {
+			if len(filterByModel(chans, cand)) > 0 {
+				served = true
+				break
+			}
+		}
+		if !served {
+			writeJSON(w, http.StatusNotFound, map[string]string{
+				"error": "no enabled channel serves auto candidates: " + strings.Join(autoCands, ", ")})
+			return
+		}
 	}
 	// 虚拟密钥的模型白名单：留空不限制；配置了则只放行列出的模型。
 	// 管理台对话测试(fabricated 请求带 ctxPlaygroundBypass 标记)显式旁路白名单——
@@ -303,20 +344,50 @@ func (p *proxy) serveBody(w http.ResponseWriter, r *http.Request, protocol, upst
 
 	start := time.Now()
 	app := inboundApp(r)
-	// openai 流式请求补 stream_options.include_usage 以获取 usage；上游不识别时回退重试
-	ab := &attemptBodies{current: body, plain: body}
-	if protocol == "openai" {
-		if b, ok := injectStreamUsage(body); ok {
-			ab.current = b
-			ab.injected = true
+	// 按候选序列依次 dispatch（单模型路径即单元素）；每个候选重写请求体里的
+	// model 并补 stream_options，全部失败才回 502。对下游只给通用错误：
+	// 渠道名/上游地址等细节留给服务端日志，防止虚拟密钥持有者探测内部拓扑。
+	tryModels := []string{model}
+	if len(autoCands) > 1 {
+		tryModels = autoCands
+	}
+	var resp *http.Response
+	var c *store.Channel
+	var lastErr error
+	for ci, cand := range tryModels {
+		b := body
+		if len(tryModels) > 1 {
+			b = jsonSetModel(body, cand)
+			model = cand
+		}
+		ab := &attemptBodies{current: b, plain: b}
+		if protocol == "openai" {
+			if ib, ok := injectStreamUsage(b); ok {
+				ab.current = ib
+				ab.injected = true
+			}
+		}
+		candChans := chans
+		if len(autoCands) > 0 {
+			candChans = filterByModel(chans, cand)
+		}
+		resp, c, _, lastErr = p.dispatch(r, candChans, upstreamPath, ab, model, conversationAffinityKey(cand, b))
+		if resp != nil {
+			// 多候选链：当前模型返回非 2xx（含单渠道确定性失败的透传响应）时，
+			// 同样视为"该模型不可用"，换下一候选；最后一个候选保持原样透传
+			if len(tryModels) > 1 && resp.StatusCode >= 400 && ci < len(tryModels)-1 {
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+				resp.Body.Close()
+				resp = nil
+				continue
+			}
+			break
+		}
+		if lastErr != nil {
+			log.Printf("proxy %s %s failed (model %s): %v", r.Method, upstreamPath, cand, lastErr)
 		}
 	}
-	resp, c, _, lastErr := p.dispatch(r, chans, upstreamPath, ab, model)
 	if resp == nil {
-		// 对下游只给通用错误：渠道名/上游地址等细节留给服务端日志，防止虚拟密钥持有者探测内部拓扑
-		if lastErr != nil {
-			log.Printf("proxy %s %s failed: %v", r.Method, upstreamPath, lastErr)
-		}
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "all channels failed"})
 		p.logRequest(ak, nil, logProto, model, http.StatusBadGateway, time.Since(start), time.Since(start), tokenUsage{}, errMsg(lastErr), app)
 		return
@@ -360,10 +431,25 @@ type attemptBodies struct {
 //   - 多 key 渠道把 401/403 视为密钥问题换 key 重试；单 key 保持透传（配置错误应可见）
 //   - 其余可重试状态（408/429/5xx）按既有语义故障转移
 //   - 总尝试次数封顶 maxProxyAttempts，避免长链拖高延迟
+//   - affinity 非空时（缓存感知路由）优先回到该会话前缀上次成功的渠道与密钥
 //
 // resp == nil 表示全部尝试失败；lastErr 只进服务端日志。
-func (p *proxy) dispatch(r *http.Request, chans []store.Channel, path string, ab *attemptBodies, model string) (*http.Response, *store.Channel, *store.ChannelKey, error) {
+func (p *proxy) dispatch(r *http.Request, chans []store.Channel, path string, ab *attemptBodies, model, affinity string) (*http.Response, *store.Channel, *store.ChannelKey, error) {
 	attempts := orderCandidates(chans)
+	// 缓存感知：会话前缀上次成功的渠道仍在候选内时提到最前（先旋转后截断，
+	// 避免把亲和渠道转出封顶窗口）
+	var preferCh, preferKey int64
+	if affinity != "" {
+		if e, ok := p.aff.get(affinity); ok {
+			for i := range attempts {
+				if attempts[i].ID == e.ch {
+					attempts = append(append([]store.Channel(nil), attempts[i:]...), attempts[:i]...)
+					preferCh, preferKey = e.ch, e.key
+					break
+				}
+			}
+		}
+	}
 	if len(attempts) > maxProxyAttempts {
 		attempts = attempts[:maxProxyAttempts]
 	}
@@ -374,6 +460,9 @@ func (p *proxy) dispatch(r *http.Request, chans []store.Channel, path string, ab
 		keys := p.keys.available(c, time.Now())
 		if len(keys) == 0 {
 			continue
+		}
+		if c.ID == preferCh {
+			keys = rotateKeyFirst(keys, preferKey)
 		}
 		enabledKeys := 0
 		for _, k := range c.APIKeys {
@@ -390,7 +479,7 @@ func (p *proxy) dispatch(r *http.Request, chans []store.Channel, path string, ab
 			resp, err := p.attemptUpstream(r, c, k.Key, path, rewriteModel(ab.current, c, model))
 			if err != nil {
 				lastErr = fmt.Errorf("channel %q: %w", c.Name, err)
-				p.keys.reportFailure(c.ID, k.ID)
+				p.keys.reportFailure(c.ID, k.ID, "渠道「"+c.Name+"」密钥 "+k.Masked)
 				continue
 			}
 			if ab.injected && resp.StatusCode == http.StatusBadRequest {
@@ -401,7 +490,7 @@ func (p *proxy) dispatch(r *http.Request, chans []store.Channel, path string, ab
 				resp, err = p.attemptUpstream(r, c, k.Key, path, rewriteModel(ab.current, c, model))
 				if err != nil {
 					lastErr = fmt.Errorf("channel %q: %w", c.Name, err)
-					p.keys.reportFailure(c.ID, k.ID)
+					p.keys.reportFailure(c.ID, k.ID, "渠道「"+c.Name+"」密钥 "+k.Masked)
 					continue
 				}
 			}
@@ -410,14 +499,30 @@ func (p *proxy) dispatch(r *http.Request, chans []store.Channel, path string, ab
 				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 				resp.Body.Close()
 				lastErr = fmt.Errorf("channel %q: upstream status %d", c.Name, resp.StatusCode)
-				p.keys.reportFailure(c.ID, k.ID)
+				p.keys.reportFailure(c.ID, k.ID, "渠道「"+c.Name+"」密钥 "+k.Masked)
 				continue
 			}
 			p.keys.reportSuccess(c.ID, k.ID)
+			if affinity != "" {
+				p.aff.put(affinity, c.ID, k.ID)
+			}
 			return resp, c, k, nil
 		}
 	}
 	return nil, nil, nil, lastErr
+}
+
+// rotateKeyFirst 把亲和密钥轮到候选首位（缓存感知路由：粘住上次成功的密钥）。
+func rotateKeyFirst(keys []store.ChannelKey, keyID int64) []store.ChannelKey {
+	if keyID == 0 || len(keys) < 2 {
+		return keys
+	}
+	for i := range keys {
+		if keys[i].ID == keyID {
+			return append(append([]store.ChannelKey(nil), keys[i:]...), keys[:i]...)
+		}
+	}
+	return keys
 }
 
 // shouldRotate 决定响应是否应换 key/渠道：多 key 时 401/403 也视为密钥问题；
@@ -445,6 +550,23 @@ func rewriteModel(body []byte, c *store.Channel, model string) []byte {
 		return body
 	}
 	v["model"] = real
+	out, err := json.Marshal(v)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+// jsonSetModel 把请求体 JSON 的 model 字段替换为指定值（auto 解析后改写用）；
+// 体不是 JSON 对象时原样返回。
+func jsonSetModel(body []byte, model string) []byte {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var v map[string]any
+	if dec.Decode(&v) != nil || v == nil {
+		return body
+	}
+	v["model"] = model
 	out, err := json.Marshal(v)
 	if err != nil {
 		return body
@@ -707,6 +829,39 @@ func (p *proxy) logRequest(ak *store.APIKey, c *store.Channel, protocol, model s
 	}
 	if err := p.st.InsertRequestLog(l); err != nil {
 		log.Printf("insert request log: %v", err)
+	}
+	p.checkErrorRate(status)
+}
+
+// checkErrorRate 维护近 5 分钟请求的滑动窗口，上游侧失败（5xx）占比过高时
+// 触发告警（fireErrorSpike 自带 30 分钟冷却）。
+func (p *proxy) checkErrorRate(status int) {
+	if p.alerts == nil {
+		return
+	}
+	now := time.Now()
+	p.ewMu.Lock()
+	cut := now.Add(-5 * time.Minute)
+	keep := p.ewAt[:0]
+	for _, t := range p.ewAt {
+		if t.After(cut) {
+			keep = append(keep, t)
+		}
+	}
+	p.ewAt = keep
+	p.ewAt = append(p.ewAt, now)
+	total := int64(len(p.ewAt))
+	if status >= http.StatusInternalServerError {
+		p.ewBad++
+	}
+	bad := p.ewBad
+	if bad > total { // 计数漂移保护：窗口整体滚动后归零重来
+		p.ewBad, bad = 0, 0
+	}
+	p.ewMu.Unlock()
+
+	if total >= 10 && bad*2 >= total {
+		p.alerts.fireErrorSpike(bad, total)
 	}
 }
 

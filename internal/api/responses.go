@@ -179,9 +179,9 @@ type chatCompletion struct {
 }
 
 type chatUsage struct {
-	PromptTokens     int64 `json:"prompt_tokens"`
-	CompletionTokens int64 `json:"completion_tokens"`
-	TotalTokens      int64 `json:"total_tokens"`
+	PromptTokens        int64 `json:"prompt_tokens"`
+	CompletionTokens    int64 `json:"completion_tokens"`
+	TotalTokens         int64 `json:"total_tokens"`
 	PromptTokensDetails *struct {
 		CachedTokens int64 `json:"cached_tokens"`
 	} `json:"prompt_tokens_details"`
@@ -323,9 +323,9 @@ func convertInputItem(out *chatRequest, it *responsesItem) {
 // ---------- 响应对象（非流式） ----------
 
 type responsesUsage struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
-	TotalTokens  int64 `json:"total_tokens"`
+	InputTokens        int64 `json:"input_tokens"`
+	OutputTokens       int64 `json:"output_tokens"`
+	TotalTokens        int64 `json:"total_tokens"`
 	InputTokensDetails *struct {
 		CachedTokens int64 `json:"cached_tokens"`
 	} `json:"input_tokens_details,omitempty"`
@@ -335,10 +335,10 @@ type responsesUsage struct {
 }
 
 type responsesObject struct {
-	ID        string  `json:"id"`
-	Object    string  `json:"object"`
-	CreatedAt int64   `json:"created_at"`
-	Status    string  `json:"status"`
+	ID        string `json:"id"`
+	Object    string `json:"object"`
+	CreatedAt int64  `json:"created_at"`
+	Status    string `json:"status"`
 	Error     *struct {
 		Message string `json:"message"`
 	} `json:"error"`
@@ -447,27 +447,50 @@ func (p *proxy) serveResponses(w http.ResponseWriter, r *http.Request) {
 			"error": "stateless gateway: previous_response_id is not supported, send the full conversation in input"})
 		return
 	}
-	chatReq, err := responsesToChat(&in)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	chatBody, err := json.Marshal(chatReq)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
 	chans, err := p.st.ListChannels("openai")
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	chans = enabledOnly(chans)
-	chans = filterByModel(chans, in.Model)
-	if len(chans) == 0 {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no enabled channel serves model: " + in.Model})
+	// auto 路由：解析候选序列（priority 模式给完整序列做跨模型故障转移），
+	// 转换/渠道路由/日志/计费都走解析结果
+	var autoCands []string
+	if in.Model == autoModelName {
+		cands, status, msg := p.autoOrdered(r.Context(), ak, "openai", chans, body)
+		if msg != "" {
+			writeJSON(w, status, map[string]string{"error": msg})
+			return
+		}
+		autoCands = cands
+		in.Model = cands[0]
+	}
+	// 先做一次转换校验，坏的 input（如非法工具配置）在白名单/准入前就快速失败；
+	// 实际请求体在下方按候选模型循环内构建
+	if _, err := responsesToChat(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
+	}
+
+	if len(autoCands) == 0 {
+		chans = filterByModel(chans, in.Model)
+		if len(chans) == 0 {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no enabled channel serves model: " + in.Model})
+			return
+		}
+	} else {
+		served := false
+		for _, cand := range autoCands {
+			if len(filterByModel(chans, cand)) > 0 {
+				served = true
+				break
+			}
+		}
+		if !served {
+			writeJSON(w, http.StatusNotFound, map[string]string{
+				"error": "no enabled channel serves auto candidates: " + strings.Join(autoCands, ", ")})
+			return
+		}
 	}
 	// 虚拟密钥的模型白名单：留空不限制；配置了则只放行列出的模型
 	if !ak.AllowsModel(in.Model) {
@@ -485,19 +508,54 @@ func (p *proxy) serveResponses(w http.ResponseWriter, r *http.Request) {
 
 	start := time.Now()
 	app := inboundApp(r)
-	// 流式请求补 stream_options.include_usage；上游 400 时对同渠道同密钥去掉重试一次
-	ab := &attemptBodies{current: chatBody, plain: chatBody}
-	if in.Stream {
-		if b, ok := injectStreamUsage(chatBody); ok {
-			ab.current = b
-			ab.injected = true
+	// 按候选序列依次 dispatch；每个候选以 in.Model 重建 chat 请求体
+	// （流式请求补 stream_options.include_usage；上游 400 时去掉重试一次）
+	tryModels := []string{in.Model}
+	if len(autoCands) > 1 {
+		tryModels = autoCands
+	}
+	var resp *http.Response
+	var c *store.Channel
+	var lastErr error
+	for ci, cand := range tryModels {
+		in.Model = cand
+		chatReq, cerr := responsesToChat(&in)
+		if cerr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": cerr.Error()})
+			return
+		}
+		cb, merr := json.Marshal(chatReq)
+		if merr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": merr.Error()})
+			return
+		}
+		ab := &attemptBodies{current: cb, plain: cb}
+		if in.Stream {
+			if b, ok := injectStreamUsage(cb); ok {
+				ab.current = b
+				ab.injected = true
+			}
+		}
+		candChans := chans
+		if len(autoCands) > 0 {
+			candChans = filterByModel(chans, cand)
+		}
+		resp, c, _, lastErr = p.dispatch(r, candChans, "/chat/completions", ab, in.Model, conversationAffinityKey(cand, cb))
+		if resp != nil {
+			// 多候选链：当前模型非 2xx 换下一候选，最后一个保持透传（语义同 chat 路径）
+			if len(tryModels) > 1 && resp.StatusCode >= 400 && ci < len(tryModels)-1 {
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+				resp.Body.Close()
+				resp = nil
+				continue
+			}
+			break
+		}
+		if lastErr != nil {
+			log.Printf("proxy responses failed (model %s): %v", cand, lastErr)
 		}
 	}
-	resp, c, _, lastErr := p.dispatch(r, chans, "/chat/completions", ab, in.Model)
 	if resp == nil {
-		if lastErr != nil {
-			log.Printf("proxy responses %s failed: %v", in.Model, lastErr)
-		}
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "all channels failed"})
 		p.logRequest(ak, nil, "responses", in.Model, http.StatusBadGateway,
 			time.Since(start), time.Since(start), tokenUsage{}, errMsg(lastErr), app)
@@ -584,11 +642,11 @@ type streamItem struct {
 
 // responsesStreamTransformer 把上游 chat SSE 增量转成 Responses 事件流。
 type responsesStreamTransformer struct {
-	respID      string
-	model       string
-	createdAt   int64
-	items       []*streamItem
-	toolByIndex map[int]*streamItem
+	respID       string
+	model        string
+	createdAt    int64
+	items        []*streamItem
+	toolByIndex  map[int]*streamItem
 	finishReason string
 }
 

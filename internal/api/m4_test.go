@@ -34,8 +34,8 @@ func TestMultiKeyRotationOn401(t *testing.T) {
 	srv, st := newTestServer(t)
 	_, err := st.CreateChannel(&store.Channel{
 		Name: "multi", Type: "openai", BaseURL: upstream.URL + "/v1",
-		APIKeys:   []store.ChannelKey{{Key: "bad-key"}, {Key: "good-key"}},
-		Models:    []string{"m"}, Weight: 1, Enabled: true,
+		APIKeys: []store.ChannelKey{{Key: "bad-key"}, {Key: "good-key"}},
+		Models:  []string{"m"}, Weight: 1, Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -61,26 +61,26 @@ func TestMultiKeyRotationOn401(t *testing.T) {
 }
 
 func TestKeyHealthCooldownSkipsFailedKey(t *testing.T) {
-	m := newKeyHealthManager()
+	m := newKeyHealthManager(nil)
 	c := &store.Channel{ID: 7, APIKeys: []store.ChannelKey{
 		{ID: 1, Key: "a", Enabled: true},
 		{ID: 2, Key: "b", Enabled: true},
 	}}
 	now := time.Now()
 	// 失败 1 次（未达阈值）不冷却
-	m.reportFailure(c.ID, 1)
+	m.reportFailure(c.ID, 1, "")
 	if got := m.available(c, now); len(got) != 2 {
 		t.Fatalf("after 1 failure both keys should be available, got %d", len(got))
 	}
 	// 连续失败达阈值进入冷却 → available 只剩另一把
-	m.reportFailure(c.ID, 1)
+	m.reportFailure(c.ID, 1, "")
 	got := m.available(c, now)
 	if len(got) != 1 || got[0].ID != 2 {
 		t.Fatalf("cooled key should be skipped, got %+v", got)
 	}
 	// 全部冷却时仍返回（整体冷却好过必然失败）
-	m.reportFailure(c.ID, 2)
-	m.reportFailure(c.ID, 2)
+	m.reportFailure(c.ID, 2, "")
+	m.reportFailure(c.ID, 2, "")
 	if got := m.available(c, now); len(got) != 2 {
 		t.Fatalf("all-cooling fallback expected 2 keys, got %d", len(got))
 	}

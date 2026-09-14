@@ -11,19 +11,23 @@ import (
 
 // Channel 是一个上游渠道：一种协议 + 一个入口 + 一组凭证与路由参数。
 type Channel struct {
-	ID        int64    `json:"id"`
-	Name      string   `json:"name"`
-	Type      string   `json:"type"` // openai | anthropic
-	BaseURL   string   `json:"base_url"`
-	APIKeys   []ChannelKey `json:"-"` // 解密后的明文，仅供代理转发使用，禁止序列化
-	Models    []string `json:"models"`          // 启用的模型；为空表示全部（通配）
-	DisabledModels []string `json:"disabled_models"` // 已禁用的模型，等待重新启用
-	ModelMap  map[string]string `json:"model_map"` // 模型映射：对外名 → 上游真实名
-	Weight    int      `json:"weight"`
-	Priority  int      `json:"priority"`
-	Enabled   bool     `json:"enabled"`
-	Remark    string   `json:"remark"`
-	CreatedAt string   `json:"created_at"`
+	ID             int64             `json:"id"`
+	Name           string            `json:"name"`
+	Type           string            `json:"type"` // openai | anthropic
+	BaseURL        string            `json:"base_url"`
+	APIKeys        []ChannelKey      `json:"-"`               // 解密后的明文，仅供代理转发使用，禁止序列化
+	Models         []string          `json:"models"`          // 启用的模型；为空表示全部（通配）
+	DisabledModels []string          `json:"disabled_models"` // 已禁用的模型，等待重新启用
+	ModelMap       map[string]string `json:"model_map"`       // 模型映射：对外名 → 上游真实名
+	Weight         int               `json:"weight"`
+	Priority       int               `json:"priority"`
+	Enabled        bool              `json:"enabled"`
+	Remark         string            `json:"remark"`
+	CreatedAt      string            `json:"created_at"`
+	// 余额探测：BalanceAPI 标记上游余额查询协议（'' 不查 / deepseek / openrouter），
+	// BalanceAlertBelow 为告警阈值（0 = 不告警），按余额自身币种数值比较。
+	BalanceAPI        string  `json:"balance_api"`
+	BalanceAlertBelow float64 `json:"balance_alert_below"`
 }
 
 // ChannelKey 是渠道的一把上游凭证；Key 明文不出存储层与代理层。
@@ -82,10 +86,11 @@ func (s *Store) CreateChannel(c *Channel) (int64, error) {
 		return 0, err
 	}
 	res, err := s.DB.Exec(
-		`INSERT INTO channels(name, type, base_url, models, disabled_models, model_map, weight, priority, enabled, remark)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO channels(name, type, base_url, models, disabled_models, model_map, weight, priority, enabled, remark, balance_api, balance_alert_below)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.Name, c.Type, strings.TrimRight(c.BaseURL, "/"),
 		string(models), string(disabled), string(mm), c.Weight, c.Priority, boolToInt(c.Enabled), c.Remark,
+		c.BalanceAPI, c.BalanceAlertBelow,
 	)
 	if err != nil {
 		return 0, err
@@ -121,9 +126,10 @@ func (s *Store) UpdateChannel(c *Channel) error {
 	}
 	res, err := s.DB.Exec(
 		`UPDATE channels SET name=?, type=?, base_url=?, models=?, disabled_models=?, model_map=?,
-		 weight=?, priority=?, enabled=?, remark=? WHERE id=?`,
+		 weight=?, priority=?, enabled=?, remark=?, balance_api=?, balance_alert_below=? WHERE id=?`,
 		c.Name, c.Type, strings.TrimRight(c.BaseURL, "/"),
-		string(models), string(disabled), string(mm), c.Weight, c.Priority, boolToInt(c.Enabled), c.Remark, c.ID,
+		string(models), string(disabled), string(mm), c.Weight, c.Priority, boolToInt(c.Enabled), c.Remark,
+		c.BalanceAPI, c.BalanceAlertBelow, c.ID,
 	)
 	if err != nil {
 		return err
@@ -294,7 +300,7 @@ func (s *Store) DeleteChannel(id int64) error {
 
 func (s *Store) GetChannel(id int64) (*Channel, error) {
 	c, err := s.scanChannel(s.DB.QueryRow(
-		`SELECT id, name, type, base_url, models, disabled_models, model_map, weight, priority, enabled, remark, created_at
+		`SELECT id, name, type, base_url, models, disabled_models, model_map, weight, priority, enabled, remark, created_at, balance_api, balance_alert_below
 		 FROM channels WHERE id = ?`, id,
 	))
 	if err != nil {
@@ -311,7 +317,7 @@ func (s *Store) GetChannel(id int64) (*Channel, error) {
 // GetChannelByName 按名称取渠道（配置导入按名字 upsert 用）；不存在返回 ErrNotFound。
 func (s *Store) GetChannelByName(name string) (*Channel, error) {
 	c, err := s.scanChannel(s.DB.QueryRow(
-		`SELECT id, name, type, base_url, models, disabled_models, model_map, weight, priority, enabled, remark, created_at
+		`SELECT id, name, type, base_url, models, disabled_models, model_map, weight, priority, enabled, remark, created_at, balance_api, balance_alert_below
 		 FROM channels WHERE name = ?`, name,
 	))
 	if err != nil {
@@ -327,7 +333,7 @@ func (s *Store) GetChannelByName(name string) (*Channel, error) {
 
 // ListChannels 按 type 过滤（空串表示全部），优先级高的在前。
 func (s *Store) ListChannels(typ string) ([]Channel, error) {
-	q := `SELECT id, name, type, base_url, models, disabled_models, model_map, weight, priority, enabled, remark, created_at FROM channels`
+	q := `SELECT id, name, type, base_url, models, disabled_models, model_map, weight, priority, enabled, remark, created_at, balance_api, balance_alert_below FROM channels`
 	var args []any
 	if typ != "" {
 		q += ` WHERE type = ?`
@@ -372,7 +378,7 @@ func (s *Store) loadChannelKeys(channelIDs []int64) (map[int64][]ChannelKey, err
 	}
 	rows, err := s.DB.Query(
 		`SELECT id, channel_id, key_enc, enabled FROM channel_keys
-		 WHERE channel_id IN (` + intsPlaceholder(len(channelIDs)) + `) ORDER BY channel_id, sort, id`,
+		 WHERE channel_id IN (`+intsPlaceholder(len(channelIDs))+`) ORDER BY channel_id, sort, id`,
 		intsToAny(channelIDs)...)
 	if err != nil {
 		return nil, err
@@ -428,7 +434,8 @@ func (s *Store) scanChannel(row scanner) (*Channel, error) {
 	var models, disabled, mm string
 	var enabled int
 	err := row.Scan(&c.ID, &c.Name, &c.Type, &c.BaseURL, &models, &disabled, &mm,
-		&c.Weight, &c.Priority, &enabled, &c.Remark, &c.CreatedAt)
+		&c.Weight, &c.Priority, &enabled, &c.Remark, &c.CreatedAt,
+		&c.BalanceAPI, &c.BalanceAlertBelow)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
