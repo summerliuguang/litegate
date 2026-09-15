@@ -76,6 +76,21 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 CREATE INDEX IF NOT EXISTS idx_logs_ts ON request_logs(ts);
 CREATE INDEX IF NOT EXISTS idx_logs_channel ON request_logs(channel_id);
+CREATE TABLE IF NOT EXISTS admin_audit (
+	id     INTEGER PRIMARY KEY AUTOINCREMENT,
+	ts     TEXT NOT NULL DEFAULT (datetime('now')),
+	action TEXT NOT NULL,
+	detail TEXT NOT NULL DEFAULT '',
+	ip     TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS request_bodies (
+	log_id    INTEGER PRIMARY KEY,
+	ts        TEXT NOT NULL DEFAULT (datetime('now')),
+	model     TEXT NOT NULL DEFAULT '',
+	api_key_id INTEGER NOT NULL DEFAULT 0,
+	req_body  TEXT NOT NULL DEFAULT '',
+	resp_body TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS model_prices (
 	model            TEXT PRIMARY KEY,
 	input_price      REAL NOT NULL DEFAULT 0,
@@ -163,6 +178,10 @@ func migrate(db *sql.DB) error {
 		{"api_keys", "auto_mode", `ALTER TABLE api_keys ADD COLUMN auto_mode TEXT NOT NULL DEFAULT ''`},
 		{"api_keys", "auto_models", `ALTER TABLE api_keys ADD COLUMN auto_models TEXT NOT NULL DEFAULT '[]'`},
 		{"api_keys", "auto_priority", `ALTER TABLE api_keys ADD COLUMN auto_priority TEXT NOT NULL DEFAULT '[]'`},
+		{"api_keys", "app_name", `ALTER TABLE api_keys ADD COLUMN app_name TEXT NOT NULL DEFAULT ''`},
+		{"api_keys", "model_alias", `ALTER TABLE api_keys ADD COLUMN model_alias TEXT NOT NULL DEFAULT '{}'`},
+		{"api_keys", "max_tokens_cap", `ALTER TABLE api_keys ADD COLUMN max_tokens_cap INTEGER NOT NULL DEFAULT 0`},
+		{"api_keys", "concurrency_limit", `ALTER TABLE api_keys ADD COLUMN concurrency_limit INTEGER NOT NULL DEFAULT 0`},
 		{"model_prices", "currency", `ALTER TABLE model_prices ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD'`},
 		{"model_prices", "cache_read_price", `ALTER TABLE model_prices ADD COLUMN cache_read_price REAL NOT NULL DEFAULT 0`},
 		{"model_prices", "offpeak_ratio", `ALTER TABLE model_prices ADD COLUMN offpeak_ratio REAL NOT NULL DEFAULT 1`},

@@ -109,6 +109,16 @@
       </div>
       <div class="field"><label class="label is-size-7">有效期至（留空 = 永久；过期后该密钥返回 401）</label>
         <input class="input is-small" id="eExpires" type="date"></div>
+      <div class="columns" style="margin-bottom:0">
+        <div class="column"><div class="field"><label class="label is-size-7">应用标记固化（日志/用量始终记为该名，留空跟随 X-LiteGate-App 头）</label>
+          <input class="input is-small" id="eApp" placeholder="如 hermes / baby-diary"></div></div>
+        <div class="column"><div class="field"><label class="label is-size-7">单次 max_tokens 封顶（0 = 不封顶）</label>
+          <input class="input is-small" id="eTokCap" type="number" min="0" value="0"></div></div>
+        <div class="column"><div class="field"><label class="label is-size-7">并发上限（0 = 不限，超限 429）</label>
+          <input class="input is-small" id="eConc" type="number" min="0" value="0"></div></div>
+      </div>
+      <div class="field"><label class="label is-size-7">模型别名（每行一条 外部名=真实名，客户端硬编码旧模型名时映射到实际模型）</label>
+        <textarea class="textarea is-small mono" id="eAlias" rows="2" placeholder="gpt-4o=deepseek-flash&#10;claude-sonnet=deepseek-v4-pro"></textarea></div>
       <p id="eErr" class="help is-danger" style="min-height:1.2em"></p>
     </section>
     <footer class="modal-card-foot">
@@ -147,6 +157,9 @@ async function load() {
       if (k.budget_usd) limits.push('$' + k.budget_usd + '/' + (k.budget_period === 'monthly' ? '月' : '日'));
       if (k.budget_tokens) limits.push(k.budget_tokens.toLocaleString() + ' tok/' + (k.budget_period === 'monthly' ? '月' : '日'));
       if (k.expires_at) limits.push('至 ' + k.expires_at);
+      if (k.app_name) limits.push('app=' + k.app_name);
+      if (k.max_tokens_cap) limits.push('maxTok≤' + k.max_tokens_cap);
+      if (k.concurrency_limit) limits.push('并发≤' + k.concurrency_limit);
       const tps = k.avg_tps ? k.avg_tps.toFixed(1) + ' tok/s' : '';
       const tpsCell = tps
         ? `<span title="近 7 天成功请求 ${fmtInt(k.recent_requests)} 次的加权平均">${esc(tps)}</span>`
@@ -404,6 +417,11 @@ window.openEditKey = function (id) {
   document.getElementById('eBudgetTok').value = k.budget_tokens || 0;
   document.getElementById('eBudgetPeriod').value = k.budget_period === 'monthly' ? 'monthly' : 'daily';
   document.getElementById('eExpires').value = k.expires_at || '';
+  document.getElementById('eApp').value = k.app_name || '';
+  document.getElementById('eTokCap').value = k.max_tokens_cap || 0;
+  document.getElementById('eConc').value = k.concurrency_limit || 0;
+  document.getElementById('eAlias').value = Object.entries(k.model_alias || {})
+    .map(([f, t]) => f + '=' + t).join('\n');
   document.getElementById('eErr').textContent = '';
   document.getElementById('editModal').classList.add('is-active');
 };
@@ -428,6 +446,17 @@ document.getElementById('eSave').addEventListener('click', async () => {
         budget_tokens: parseInt(document.getElementById('eBudgetTok').value, 10) || 0,
         budget_period: document.getElementById('eBudgetPeriod').value,
         expires_at: document.getElementById('eExpires').value,
+        app_name: document.getElementById('eApp').value.trim(),
+        max_tokens_cap: parseInt(document.getElementById('eTokCap').value, 10) || 0,
+        concurrency_limit: parseInt(document.getElementById('eConc').value, 10) || 0,
+        model_alias: (() => {
+          const m = {};
+          for (const line of document.getElementById('eAlias').value.split('\n')) {
+            const i = line.indexOf('=');
+            if (i > 0 && line.slice(i + 1).trim()) m[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+          }
+          return m;
+        })(),
         auto_mode: autoMode,
         auto_models: [...autoPoolSel],
         auto_priority: autoMode === 'priority' ? autoPriority.filter(m => autoPoolSel.has(m)) : [],

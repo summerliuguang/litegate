@@ -22,13 +22,15 @@ import (
 const maxBodyBytes = 32 << 20
 
 type proxy struct {
-	st     *store.Store
-	client *http.Client
-	cache  modelsCache
-	pc     priceCache
-	keys   *keyHealthManager
-	limits *keyAdmission
-	alerts *alertManager
+	st      *store.Store
+	client  *http.Client
+	cache   modelsCache
+	pc      priceCache
+	keys    *keyHealthManager
+	limits  *keyAdmission
+	alerts  *alertManager
+	metrics *metricsState
+	bcfg    bodyLogCfgCache
 	// auto 路由状态：模型延迟统计缓存与各密钥的轮转计数器（balance 模式）
 	lat modelLatencyCache
 	rr  sync.Map // api_key_id -> *atomic.Uint64
@@ -287,6 +289,12 @@ func (p *proxy) serveBody(w http.ResponseWriter, r *http.Request, protocol, upst
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// 密钥级模型别名：客户端硬编码的外部名（如 gpt-4o）映射到实际模型；
+	// 后续白名单/渠道选择都按映射后的模型。auto 不参与别名。
+	if target := ak.AliasTarget(model); target != "" {
+		body = jsonSetModel(body, target)
+		model = target
+	}
 	// 停用的渠道不接流量
 	chans = enabledOnly(chans)
 	// auto 路由：model="auto" 时按密钥配置的策略解析候选序列；后续渠道选择/
@@ -341,9 +349,20 @@ func (p *proxy) serveBody(w http.ResponseWriter, r *http.Request, protocol, upst
 		writeJSON(w, code, map[string]string{"error": msg})
 		return
 	}
+	// 密钥级并发上限：超出即 429；释放覆盖后续所有返回路径
+	release, ok := p.limits.enter(ak)
+	if !ok {
+		w.Header().Set("Retry-After", "5")
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limited: concurrency limit reached for this api key"})
+		return
+	}
+	defer release()
 
 	start := time.Now()
 	app := inboundApp(r)
+	if ak.AppName != "" {
+		app = ak.AppName // 应用归因固化：密钥配置优先于客户端自带头
+	}
 	// 按候选序列依次 dispatch（单模型路径即单元素）；每个候选重写请求体里的
 	// model 并补 stream_options，全部失败才回 502。对下游只给通用错误：
 	// 渠道名/上游地址等细节留给服务端日志，防止虚拟密钥持有者探测内部拓扑。
@@ -354,12 +373,17 @@ func (p *proxy) serveBody(w http.ResponseWriter, r *http.Request, protocol, upst
 	var resp *http.Response
 	var c *store.Channel
 	var lastErr error
+	var sentBody []byte
 	for ci, cand := range tryModels {
 		b := body
 		if len(tryModels) > 1 {
 			b = jsonSetModel(body, cand)
 			model = cand
 		}
+		if ak.MaxTokensCap > 0 {
+			b = jsonClampMaxTokens(b, ak.MaxTokensCap)
+		}
+		sentBody = b
 		ab := &attemptBodies{current: b, plain: b}
 		if protocol == "openai" {
 			if ib, ok := injectStreamUsage(b); ok {
@@ -403,7 +427,7 @@ func (p *proxy) serveBody(w http.ResponseWriter, r *http.Request, protocol, upst
 		}
 		resp = tr
 	}
-	p.respond(w, ak, c, logProto, model, resp, start, app)
+	p.respond(w, ak, c, logProto, model, resp, start, app, sentBody)
 }
 
 // inboundApp 提取应用归因头：客户端可选自带 X-LiteGate-App 标记调用方，
@@ -574,6 +598,35 @@ func jsonSetModel(body []byte, model string) []byte {
 	return out
 }
 
+// jsonClampMaxTokens 把请求体 JSON 里的 max_tokens 钳制到上限（字段缺失不注入，
+// 避免 embeddings 等不接受该字段的端点报错）；体不是 JSON 对象时原样返回。
+func jsonClampMaxTokens(body []byte, cap int64) []byte {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var v map[string]any
+	if dec.Decode(&v) != nil || v == nil {
+		return body
+	}
+	mt, ok := v["max_tokens"]
+	if !ok {
+		return body
+	}
+	n, ok := mt.(json.Number)
+	if !ok {
+		return body
+	}
+	cur, err := n.Int64()
+	if err != nil || cur <= cap {
+		return body
+	}
+	v["max_tokens"] = cap
+	out, err := json.Marshal(v)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
 // errMsg 返回内部错误的安全摘要（截断，供日志表使用）。
 func errMsg(err error) string {
 	if err == nil {
@@ -614,7 +667,8 @@ func (p *proxy) attemptUpstream(r *http.Request, c *store.Channel, key, path str
 // respond 把上游响应回写给客户端；进入此函数后不再故障转移。
 // 同时被动提取 usage：流式靠 sseUsageScanner 逐行嗅探，非流式保留响应体
 // 末尾 64KB（usage 位于 JSON 尾部）等复制完成后再解析。
-func (p *proxy) respond(w http.ResponseWriter, ak *store.APIKey, c *store.Channel, protocol, model string, resp *http.Response, start time.Time, app string) {
+// reqBody 非空时按采样配置留存正文（回放排障用）。
+func (p *proxy) respond(w http.ResponseWriter, ak *store.APIKey, c *store.Channel, protocol, model string, resp *http.Response, start time.Time, app string, reqBody []byte) {
 	defer resp.Body.Close()
 	ttfb := time.Since(start) // 上游返回响应头的耗时，近似上游首包延迟
 	ct := resp.Header.Get("Content-Type")
@@ -625,6 +679,7 @@ func (p *proxy) respond(w http.ResponseWriter, ak *store.APIKey, c *store.Channe
 
 	var u tokenUsage
 	var err error
+	var respTail []byte
 	if strings.HasPrefix(ct, "text/event-stream") {
 		var scan sseUsageScanner
 		_, err = streamCopy(w, resp.Body, &scan)
@@ -633,12 +688,16 @@ func (p *proxy) respond(w http.ResponseWriter, ak *store.APIKey, c *store.Channe
 		tail := &tailBuffer{cap: maxUsageTail}
 		_, err = io.Copy(w, io.TeeReader(resp.Body, tail))
 		u, _ = usageFromJSON(tail.bytes())
+		respTail = tail.bytes()
 	}
 	errMsg := ""
 	if err != nil {
 		errMsg = err.Error()
 	}
-	p.logRequest(ak, c, protocol, model, resp.StatusCode, time.Since(start), ttfb, u, errMsg, app)
+	logID := p.logRequest(ak, c, protocol, model, resp.StatusCode, time.Since(start), ttfb, u, errMsg, app)
+	if len(respTail) > 0 && resp.StatusCode == http.StatusOK {
+		p.captureBody(logID, ak, model, reqBody, respTail)
+	}
 }
 
 // authenticate 校验下游虚拟密钥：Authorization: Bearer 或 X-Api-Key（Claude Code 风格）。
@@ -801,7 +860,10 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 
 func (t *tailBuffer) bytes() []byte { return t.buf }
 
-func (p *proxy) logRequest(ak *store.APIKey, c *store.Channel, protocol, model string, status int, total, ttfb time.Duration, u tokenUsage, errMsg string, app string) {
+func (p *proxy) logRequest(ak *store.APIKey, c *store.Channel, protocol, model string, status int, total, ttfb time.Duration, u tokenUsage, errMsg string, app string) int64 {
+	if ak != nil && ak.AppName != "" {
+		app = ak.AppName // 应用归因固化
+	}
 	if len(errMsg) > 512 {
 		errMsg = errMsg[:512]
 	}
@@ -831,6 +893,12 @@ func (p *proxy) logRequest(ak *store.APIKey, c *store.Channel, protocol, model s
 		log.Printf("insert request log: %v", err)
 	}
 	p.checkErrorRate(status)
+	cur := ""
+	if price != nil {
+		cur = price.Currency
+	}
+	p.metrics.observe(model, protocol, status, total.Milliseconds(), u.prompt, u.completion, u.cacheRead, cost, cur)
+	return l.ID
 }
 
 // checkErrorRate 维护近 5 分钟请求的滑动窗口，上游侧失败（5xx）占比过高时

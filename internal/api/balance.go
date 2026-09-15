@@ -187,6 +187,7 @@ func (a *admin) putAlerts(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	a.audit(r, "alerts.update", "enabled="+strconv.FormatBool(cfg.Enabled))
 	writeJSON(w, http.StatusOK, a.alerts.Config())
 }
 

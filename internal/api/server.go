@@ -3,7 +3,9 @@ package api
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"litegate/internal/store"
@@ -30,11 +32,12 @@ func NewServer(st *store.Store, adminPassword string, webHandler http.Handler) h
 	a.register(mux)
 
 	p := &proxy{
-		st:     st,
-		client: newUpstreamClient(),
-		keys:   newKeyHealthManager(alerts),
-		limits: newKeyAdmission(alerts),
-		alerts: alerts,
+		st:      st,
+		client:  newUpstreamClient(),
+		keys:    newKeyHealthManager(alerts),
+		limits:  newKeyAdmission(alerts),
+		alerts:  alerts,
+		metrics: newMetricsState(),
 	}
 	p.limits.load(st)
 	serverProxy = p
@@ -42,6 +45,7 @@ func NewServer(st *store.Store, adminPassword string, webHandler http.Handler) h
 
 	a.invalidateModels = p.invalidateModelsCache
 	a.invalidatePrices = p.invalidatePriceCache
+	a.invalidateBodyLog = p.invalidateBodyLogCfg
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("deep") == "" {
@@ -65,10 +69,32 @@ func NewServer(st *store.Store, adminPassword string, webHandler http.Handler) h
 		writeJSON(w, http.StatusOK, deep)
 	})
 
+	// /metrics：本机直连放行（Prometheus/脚本抓取）；经反代访问要求管理令牌
+	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
+		viaProxy := r.Header.Get("X-Real-IP") != "" || r.Header.Get("X-Forwarded-For") != ""
+		if viaProxy || !isLoopbackRemote(r.RemoteAddr) {
+			if !a.hasSession(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")) {
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "admin token required"})
+				return
+			}
+		}
+		p.serveMetrics(w, r)
+	})
+
 	if webHandler != nil {
 		mux.Handle("/", webHandler)
 	}
 	return mux
+}
+
+// isLoopbackRemote 判断来源地址是否为本机回环。
+func isLoopbackRemote(remote string) bool {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = remote
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

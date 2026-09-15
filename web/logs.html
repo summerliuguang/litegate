@@ -95,6 +95,10 @@
       <button class="delete" id="detailClose" aria-label="close"></button></header>
     <section class="modal-card-body">
       <dl class="detail-grid" id="detailBody"></dl>
+      <div id="replayBox" style="display:none;margin-top:.7rem;border-top:1px solid var(--line,#e8eaf0);padding-top:.6rem">
+        <button class="button is-small is-link is-light" id="btnReplay">↻ 回放此请求（重新调用对比）</button>
+        <div id="replayResult" class="is-size-7" style="margin-top:.5rem;white-space:pre-wrap;word-break:break-word;display:none"></div>
+      </div>
     </section>
     <footer class="modal-card-foot"><button class="button" id="detailOk">关闭</button></footer>
   </div>
@@ -266,6 +270,27 @@ function showDetail(l, chName, keyName) {
     kv('错误', l.error ? `<span style="color:#c0392b;white-space:pre-wrap">${esc(l.error)}</span>` : '—'),
   ].join('');
   document.getElementById('detailModal').classList.add('is-active');
+  // 有采样正文时显示回放按钮
+  const rbox = document.getElementById('replayBox');
+  const rres = document.getElementById('replayResult');
+  rbox.style.display = 'none'; rres.style.display = 'none'; rres.textContent = '';
+  api('/api/admin/bodylog/' + l.id).then(() => {
+    rbox.style.display = 'block';
+    document.getElementById('btnReplay').onclick = async () => {
+      document.getElementById('btnReplay').disabled = true;
+      rres.style.display = 'block';
+      rres.textContent = '回放中…（重新调用一次上游，结果记入日志 app=replay）';
+      try {
+        const r = await api(`/api/admin/bodylog/${l.id}/replay`, { method: 'POST' });
+        if (r.error) rres.textContent = '回放失败：' + (typeof r.error === 'string' ? r.error : JSON.stringify(r.error));
+        else {
+          const u = r.usage ? `\n用量：输入 ${r.usage.prompt_tokens ?? '-'} tok · 输出 ${r.usage.completion_tokens ?? '-'} tok` : '';
+          rres.textContent = `HTTP ${r.status}\n` + (r.content || '（无正文）') + u;
+        }
+      } catch (ex) { rres.textContent = '回放失败：' + ex.message; }
+      document.getElementById('btnReplay').disabled = false;
+    };
+  }).catch(() => {});
 }
 document.getElementById('detailClose').addEventListener('click', () => document.getElementById('detailModal').classList.remove('is-active'));
 document.getElementById('detailOk').addEventListener('click', () => document.getElementById('detailModal').classList.remove('is-active'));

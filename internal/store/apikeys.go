@@ -29,6 +29,22 @@ type APIKey struct {
 	AutoMode     string   `json:"auto_mode"` // latency | balance | priority | smart
 	AutoModels   []string `json:"auto_models"`
 	AutoPriority []string `json:"auto_priority"`
+	// 应用归因固化：非空时日志/用量始终记为该应用名（忽略 X-LiteGate-App 头）。
+	AppName string `json:"app_name"`
+	// 模型别名：外部名 → 真实名（客户端硬编码 gpt-4o 等名字时映射到实际模型）。
+	ModelAlias map[string]string `json:"model_alias"`
+	// 消费封顶：MaxTokensCap 为单次请求 max_tokens 上限（0 = 不封顶，超限就近钳制）；
+	// ConcurrencyLimit 为密钥级并发请求数上限（0 = 不限，超限 429）。
+	MaxTokensCap     int64 `json:"max_tokens_cap"`
+	ConcurrencyLimit int64 `json:"concurrency_limit"`
+}
+
+// AliasTarget 返回模型别名对应的目标模型；无别名返回空串。
+func (k *APIKey) AliasTarget(model string) string {
+	if len(k.ModelAlias) == 0 || model == "" {
+		return ""
+	}
+	return k.ModelAlias[model]
 }
 
 // AllowsModel 报告该密钥是否允许调用某模型（空列表 = 不限制）。
@@ -49,20 +65,24 @@ func scanAllowedModels(s string) []string {
 
 const apiKeyColumns = `id, key, name, allowed_models, enabled, created_at,
 	expires_at, rpm_limit, tpm_limit, budget_usd, budget_period, budget_tokens,
-	auto_mode, auto_models, auto_priority`
+	auto_mode, auto_models, auto_priority, app_name, model_alias, max_tokens_cap, concurrency_limit`
 
 func scanAPIKey(scan func(dest ...any) error) (*APIKey, error) {
 	var k APIKey
 	var enabled int
-	var allowed, autoModels, autoPriority string
+	var allowed, autoModels, autoPriority, alias string
 	if err := scan(&k.ID, &k.Key, &k.Name, &allowed, &enabled, &k.CreatedAt,
 		&k.ExpiresAt, &k.RPMLimit, &k.TPMLimit, &k.BudgetUSD, &k.BudgetPeriod, &k.BudgetTokens,
-		&k.AutoMode, &autoModels, &autoPriority); err != nil {
+		&k.AutoMode, &autoModels, &autoPriority,
+		&k.AppName, &alias, &k.MaxTokensCap, &k.ConcurrencyLimit); err != nil {
 		return nil, err
 	}
 	k.AllowedModels = scanAllowedModels(allowed)
 	k.AutoModels = scanAllowedModels(autoModels)
 	k.AutoPriority = scanAllowedModels(autoPriority)
+	if alias != "" {
+		_ = json.Unmarshal([]byte(alias), &k.ModelAlias)
+	}
 	k.Enabled = enabled == 1
 	return &k, nil
 }
@@ -90,12 +110,21 @@ func (s *Store) CreateAPIKey(k *APIKey) error {
 	if err != nil {
 		return err
 	}
+	alias, err := json.Marshal(k.ModelAlias)
+	if err != nil {
+		return err
+	}
+	if k.ModelAlias == nil {
+		alias = []byte("{}")
+	}
 	res, err := s.DB.Exec(
 		`INSERT INTO api_keys(key, name, allowed_models, enabled, expires_at, rpm_limit, tpm_limit,
-		     budget_usd, budget_period, budget_tokens, auto_mode, auto_models, auto_priority)
-		 VALUES(?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		     budget_usd, budget_period, budget_tokens, auto_mode, auto_models, auto_priority,
+		     app_name, model_alias, max_tokens_cap, concurrency_limit)
+		 VALUES(?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		k.Key, k.Name, string(allowed), k.ExpiresAt, k.RPMLimit, k.TPMLimit,
-		k.BudgetUSD, k.BudgetPeriod, k.BudgetTokens, k.AutoMode, string(autoModels), string(autoPriority))
+		k.BudgetUSD, k.BudgetPeriod, k.BudgetTokens, k.AutoMode, string(autoModels), string(autoPriority),
+		k.AppName, string(alias), k.MaxTokensCap, k.ConcurrencyLimit)
 	if err != nil {
 		return err
 	}
@@ -117,16 +146,25 @@ func (s *Store) UpdateAPIKey(k *APIKey) error {
 	if err != nil {
 		return err
 	}
+	alias, err := json.Marshal(k.ModelAlias)
+	if err != nil {
+		return err
+	}
+	if k.ModelAlias == nil {
+		alias = []byte("{}")
+	}
 	if k.BudgetPeriod != "monthly" {
 		k.BudgetPeriod = "daily"
 	}
 	res, err := s.DB.Exec(
 		`UPDATE api_keys SET name = ?, allowed_models = ?, expires_at = ?, rpm_limit = ?,
 		     tpm_limit = ?, budget_usd = ?, budget_period = ?, budget_tokens = ?,
-		     auto_mode = ?, auto_models = ?, auto_priority = ? WHERE id = ?`,
+		     auto_mode = ?, auto_models = ?, auto_priority = ?,
+		     app_name = ?, model_alias = ?, max_tokens_cap = ?, concurrency_limit = ? WHERE id = ?`,
 		k.Name, string(allowed), k.ExpiresAt, k.RPMLimit, k.TPMLimit,
 		k.BudgetUSD, k.BudgetPeriod, k.BudgetTokens,
-		k.AutoMode, string(autoModels), string(autoPriority), k.ID)
+		k.AutoMode, string(autoModels), string(autoPriority),
+		k.AppName, string(alias), k.MaxTokensCap, k.ConcurrencyLimit, k.ID)
 	if err != nil {
 		return err
 	}

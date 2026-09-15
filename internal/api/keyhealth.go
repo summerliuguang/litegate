@@ -62,6 +62,20 @@ func (m *keyHealthManager) reportFailure(channelID, keyID int64, label string) {
 	}
 }
 
+// coolingCount 返回当前处于冷却中的渠道密钥数量（指标暴露用）。
+func (m *keyHealthManager) coolingCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	n := 0
+	for _, t := range m.until {
+		if now.Before(t) {
+			n++
+		}
+	}
+	return n
+}
+
 func (m *keyHealthManager) reportSuccess(channelID, keyID int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

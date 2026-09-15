@@ -106,6 +106,14 @@
   .tpl-item .del{flex:none;border:none;background:none;color:#9898ac;font-size:.9rem;
     cursor:pointer;padding:0 .2rem}
   .tpl-item .del:hover{color:#c0392b}
+  .cmp-grid{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}
+  .cmp-side{border:1px solid var(--line,#e8eaf0);border-radius:12px;padding:.6rem;
+    background:var(--bg,#f7f8fa);min-height:8rem;font-size:.82rem;white-space:pre-wrap;
+    overflow-wrap:anywhere;max-height:44vh;overflow-y:auto}
+  .cmp-side .cmp-head{font-size:.72rem;color:var(--muted,#8a90a0);margin-bottom:.4rem;
+    display:flex;justify-content:space-between;gap:.4rem;flex-wrap:wrap}
+  .cmp-side .cmp-head b{color:var(--text,#1f2430)}
+  @media (max-width:768px){ .cmp-grid{grid-template-columns:1fr} }
   @media (max-width:768px){
     #chatLog{height:44vh}
     .msg{max-width:92%}
@@ -124,6 +132,7 @@
   <div class="chat-top">
     <button class="chip-btn" id="btnSys" title="编辑系统提示 / 模板">系统提示</button>
     <span style="flex:1"></span>
+    <button class="chip-btn" id="btnCompare" title="同一句话并排发给两个模型对比">对比</button>
     <button class="chip-btn" id="btnClear">清空对话</button>
   </div>
   <div id="voiceDescRow" style="display:none">
@@ -152,6 +161,7 @@
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
           stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
       </button>
+      <span class="ctx-info" id="estInfo" title="按当前输入与历史的 token 预估与成本粗估"></span>
       <span class="ctx-info" id="ctxInfo" title="对话上下文长度">—</span>
       <button class="send-btn" id="btnSend" aria-label="发送">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -168,6 +178,31 @@
         accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.json,.csv,.log,.xml,.yaml,.yml,.py,.js,.ts,.go,.html,.css,.sql,.sh">
     </div>
     <div class="pop-menu" id="modelMenu"></div>
+  </div>
+</div>
+
+<!-- 对比测试弹窗:同一提示并排发两个模型,流式回显+用量成本对比 -->
+<div class="modal" id="cmpModal">
+  <div class="modal-background"></div>
+  <div class="modal-card" style="width:min(960px,94vw)">
+    <header class="modal-card-head"><p class="modal-card-title">对比测试</p>
+      <button class="delete" id="cmpClose" aria-label="close"></button></header>
+    <section class="modal-card-body">
+      <div class="is-flex" style="gap:.5rem;flex-wrap:wrap;align-items:flex-end">
+        <div style="flex:1;min-width:180px"><label class="label is-size-7">模型 A</label>
+          <div class="control select is-small is-fullwidth"><select id="cmpA"></select></div></div>
+        <div style="flex:1;min-width:180px"><label class="label is-size-7">模型 B</label>
+          <div class="control select is-small is-fullwidth"><select id="cmpB"></select></div></div>
+      </div>
+      <label class="label is-size-7" style="margin-top:.6rem">提示词</label>
+      <textarea class="textarea is-small" id="cmpPrompt" rows="3" placeholder="同一句话会同时发给两个模型"></textarea>
+      <button class="button is-link is-small" id="cmpGo" style="margin-top:.6rem">开始对比</button>
+      <div id="cmpGrid" class="cmp-grid" style="margin-top:.7rem;display:none">
+        <div class="cmp-side" id="cmpSideA"></div>
+        <div class="cmp-side" id="cmpSideB"></div>
+      </div>
+    </section>
+    <footer class="modal-card-foot"><button class="button" id="cmpCancel">关闭</button></footer>
   </div>
 </div>
 
@@ -271,10 +306,13 @@ function updateSysChip() {
 }
 
 // ===== 模型 =====
+let priceMap = {}; // model -> {input,output,currency}（对比/成本预估用）
+
 async function loadModels() {
   try {
     const d = await api('/api/admin/playground/models');
     models = d.models || [];
+    priceMap = d.prices || {};
     modelMenu.innerHTML = models.map(m => {
       const k = kindOf(m);
       return `<button type="button" data-m="${esc(m)}"><span class="name">${esc(m)}</span><span class="kind">${KIND_LABEL[k]}</span><span class="tick" style="visibility:hidden">✓</span></button>`;
@@ -924,6 +962,116 @@ fInput.addEventListener('keydown', e => {
 fInput.addEventListener('input', () => {
   fInput.style.height = 'auto';
   fInput.style.height = Math.min(fInput.scrollHeight, 144) + 'px';
+});
+
+// ===== 成本预估（输入时粗估当前上下文 token 与成本） =====
+function estTokens(text) {
+  let cjk = 0, other = 0;
+  for (const ch of text) (/[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/.test(ch) ? cjk++ : other++);
+  return Math.round(cjk * 0.6 + other / 4);
+}
+function fmtEstCost(model, tok) {
+  const p = priceMap[model];
+  if (!p || !tok) return '';
+  const cur = p.currency === 'CNY' ? '¥' : '$';
+  const v = (p.input + p.output) / 1e6 * tok * 0.4; // 粗估：输入为主，乘 0.4 折算输出占比
+  return ' · ≈' + cur + (v < 0.01 ? v.toFixed(4) : v.toFixed(3));
+}
+function updateEstimate() {
+  const el = document.getElementById('estInfo');
+  const msgs = buildMsgs(false);
+  if (fInput.value.trim()) msgs.push({ role: 'user', content: fInput.value });
+  let text = '';
+  for (const m of msgs) text += typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+  const tok = estTokens(text);
+  el.textContent = tok ? `预估 ~${tok} tok${model ? fmtEstCost(model, tok) : ''}` : '';
+}
+fInput.addEventListener('input', updateEstimate);
+document.getElementById('btnSys').addEventListener('click', () => setTimeout(updateEstimate, 50));
+document.getElementById('sysApply').addEventListener('click', () => setTimeout(updateEstimate, 50));
+
+// ===== 对比测试 =====
+const cmpModal = document.getElementById('cmpModal');
+function openCompare() {
+  const opts = models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+  document.getElementById('cmpA').innerHTML = opts;
+  document.getElementById('cmpB').innerHTML = opts;
+  if (models.length > 1) document.getElementById('cmpB').value = models[1];
+  document.getElementById('cmpGrid').style.display = 'none';
+  cmpModal.classList.add('is-active');
+}
+document.getElementById('btnCompare').addEventListener('click', openCompare);
+document.getElementById('cmpClose').addEventListener('click', () => cmpModal.classList.remove('is-active'));
+document.getElementById('cmpCancel').addEventListener('click', () => cmpModal.classList.remove('is-active'));
+document.querySelector('#cmpModal .modal-background').addEventListener('click', () => cmpModal.classList.remove('is-active'));
+
+function fmtCostByUsage(m, usage) {
+  const p = priceMap[m];
+  if (!p || !usage) return '';
+  const cur = p.currency === 'CNY' ? '¥' : '$';
+  const v = ((usage.prompt_tokens || 0) * p.input + (usage.completion_tokens || 0) * p.output) / 1e6;
+  return cur + (v < 0.01 ? v.toFixed(4) : v.toFixed(3));
+}
+async function streamCompareSide(model, prompt, sideEl) {
+  const head = sideEl.querySelector('.cmp-head');
+  const body = sideEl.querySelector('.cmp-body');
+  const t0 = performance.now();
+  let ttfb = null, acc = '', usage = null;
+  const resp = await fetch('/api/admin/playground/chat', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + getToken(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: true }),
+  });
+  if (!resp.ok || !resp.body) {
+    let msg = 'HTTP ' + resp.status;
+    try { const j = await resp.json(); if (j.error) msg = typeof j.error === 'string' ? j.error : JSON.stringify(j.error); } catch (_) {}
+    head.innerHTML = `<b>${esc(model)}</b><span>失败：${esc(msg)}</span>`;
+    return;
+  }
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (ttfb === null) ttfb = Math.round(performance.now() - t0);
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t.startsWith('data:')) continue;
+      const pay = t.slice(5).trim();
+      if (pay === '[DONE]') continue;
+      try {
+        const j = JSON.parse(pay);
+        if (j.usage) usage = j.usage;
+        const d = j.choices && j.choices[0] && (j.choices[0].delta || {});
+        if (d.content) { acc += d.content; body.textContent = acc; }
+      } catch (_) {}
+    }
+  }
+  const total = Math.round(performance.now() - t0);
+  const cost = fmtCostByUsage(model, usage);
+  head.innerHTML = `<b>${esc(model)}</b><span>${ttfb ?? '-'} ms 首字 · ${total} ms 总` +
+    (usage ? ` · ${usage.prompt_tokens || 0}+${usage.completion_tokens || 0} tok` : '') +
+    (cost ? ` · ${cost}` : '') + '</span>';
+}
+document.getElementById('cmpGo').addEventListener('click', () => {
+  const prompt = document.getElementById('cmpPrompt').value.trim();
+  const ma = document.getElementById('cmpA').value, mb = document.getElementById('cmpB').value;
+  if (!prompt) { toast('请输入提示词', false); return; }
+  if (!ma || !mb) { toast('需要两个可用模型', false); return; }
+  const grid = document.getElementById('cmpGrid');
+  grid.style.display = 'grid';
+  grid.innerHTML = `<div class="cmp-side" id="cmpSideA"><div class="cmp-head"><b>${esc(ma)}</b><span>请求中…</span></div><div class="cmp-body"></div></div>` +
+    `<div class="cmp-side" id="cmpSideB"><div class="cmp-head"><b>${esc(mb)}</b><span>请求中…</span></div><div class="cmp-body"></div></div>`;
+  const go = document.getElementById('cmpGo');
+  go.disabled = true;
+  Promise.allSettled([
+    streamCompareSide(ma, prompt, document.getElementById('cmpSideA')),
+    streamCompareSide(mb, prompt, document.getElementById('cmpSideB')),
+  ]).finally(() => { go.disabled = false; });
 });
 
 loadModels();

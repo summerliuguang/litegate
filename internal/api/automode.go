@@ -35,6 +35,7 @@ func (p *proxy) autoOrdered(ctx context.Context, ak *store.APIKey, protocol stri
 	if len(cands) == 0 {
 		return nil, 404, "auto routing: no enabled candidate model for this api key"
 	}
+	p.metrics.observeAuto(ak.AutoMode)
 	switch ak.AutoMode {
 	case "latency":
 		return []string{p.pickByLatency(cands)}, 0, ""

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>告警设置 - LiteGate</title>
+<title>设置 - LiteGate</title>
 <link rel="stylesheet" href="/static/vendor/bulma.min.css">
 <script src="/static/theme.js"></script>
 <link rel="stylesheet" href="/static/skin.css">
@@ -11,12 +11,13 @@
 </head>
 <body data-page="settings">
 <div class="wrap">
-  <h1 class="title is-4" style="margin:0 0 .3rem">告警设置</h1>
+  <h1 class="title is-4" style="margin:0 0 .3rem">设置</h1>
   <p class="is-size-7 has-text-grey" style="margin:0 0 .8rem">
     关键事件（虚拟密钥预算越线/耗尽、渠道密钥冷却、上游余额不足、近 5 分钟错误率突增）
     通过 webhook 推送。同一事件在冷却期内不重复发送。
   </p>
 
+  <h2 class="title is-6" style="margin:.8rem 0 .5rem">告警推送</h2>
   <div class="card" style="padding:1rem;max-width:640px">
     <label class="checkbox is-size-7" style="margin-bottom:.6rem">
       <input type="checkbox" id="aEnabled"> 启用告警推送
@@ -46,6 +47,34 @@
     <p class="help is-size-7 has-text-grey" style="margin-top:.6rem">
       上游余额的告警阈值在「渠道管理」里按渠道单独配置（需渠道选择余额接口）。
     </p>
+  </div>
+
+  <h2 class="title is-6" style="margin:1.2rem 0 .5rem">日志正文采样（回放排障用）</h2>
+  <div class="card" style="padding:1rem;max-width:640px">
+    <label class="checkbox is-size-7" style="margin-bottom:.6rem">
+      <input type="checkbox" id="bEnabled"> 启用采样（仅非流式请求，响应成功时留存）
+    </label>
+    <div class="columns" style="margin-bottom:0">
+      <div class="column"><div class="field"><label class="label is-size-7">采样率（%）</label>
+        <input class="input is-small" id="bPct" type="number" min="1" max="100" value="10"></div></div>
+      <div class="column"><div class="field"><label class="label is-size-7">留存天数</label>
+        <input class="input is-small" id="bTtl" type="number" min="1" value="7"></div></div>
+      <div class="column"><div class="field"><label class="label is-size-7">单份截断（KB，≤64）</label>
+        <input class="input is-small" id="bMax" type="number" min="1" max="64" value="32"></div></div>
+    </div>
+    <p id="bErr" class="help is-danger" style="min-height:1.2em"></p>
+    <button class="button is-link is-small" id="bSave">保存采样配置</button>
+    <p class="help is-size-7 has-text-grey" style="margin-top:.4rem">
+      留存后可在「请求日志」详情里一键回放（用原请求体重新调用，结果与原请求对比）。
+    </p>
+  </div>
+
+  <h2 class="title is-6" style="margin:1.2rem 0 .5rem">管理操作审计（最近 100 条）</h2>
+  <div class="card" style="padding:.6rem;max-width:640px">
+    <table class="table is-fullwidth is-size-7" style="border-radius:8px">
+      <thead><tr><th>时间</th><th>操作</th><th>详情</th><th>来源 IP</th></tr></thead>
+      <tbody id="auditRows"><tr><td colspan="4" class="has-text-grey">加载中…</td></tr></tbody>
+    </table>
   </div>
 </div>
 <script src="/static/common.js"></script>
@@ -91,7 +120,54 @@ $('aTest').addEventListener('click', async () => {
   catch (ex) { $('aErr').textContent = ex.message; }
 });
 
+async function loadAudit() {
+  try {
+    const rows = await api('/api/admin/audit?limit=100');
+    const tb = document.getElementById('auditRows');
+    if (!rows || !rows.length) {
+      tb.innerHTML = '<tr><td colspan="4" class="has-text-grey">暂无记录（管理台变更操作会记录在这里）</td></tr>';
+      return;
+    }
+    tb.innerHTML = rows.map(a => `<tr>
+      <td class="mono">${fmtTs(a.ts)}</td>
+      <td><span class="tag is-light is-size-7">${esc(a.action)}</span></td>
+      <td style="word-break:break-all">${esc(a.detail)}</td>
+      <td class="mono">${esc(a.ip)}</td>
+    </tr>`).join('');
+  } catch (ex) {
+    document.getElementById('auditRows').innerHTML =
+      `<tr><td colspan="4" class="has-text-grey">加载失败：${esc(ex.message)}</td></tr>`;
+  }
+}
+
+async function loadBodyLog() {
+  try {
+    const c = await api('/api/admin/bodylog');
+    $('bEnabled').checked = !!c.enabled;
+    $('bPct').value = c.sample_pct || 10;
+    $('bTtl').value = c.ttl_days || 7;
+    $('bMax').value = Math.round((c.max_bytes || 32768) / 1024);
+  } catch (ex) { $('bErr').textContent = ex.message; }
+}
+$('bSave').addEventListener('click', async () => {
+  $('bErr').textContent = '';
+  try {
+    await api('/api/admin/bodylog', {
+      method: 'PUT',
+      body: JSON.stringify({
+        enabled: $('bEnabled').checked,
+        sample_pct: parseInt($('bPct').value, 10) || 10,
+        ttl_days: parseInt($('bTtl').value, 10) || 7,
+        max_bytes: (parseInt($('bMax').value, 10) || 32) * 1024,
+      }),
+    });
+    toast('采样配置已保存');
+  } catch (ex) { $('bErr').textContent = ex.message; }
+});
+
 loadCfg();
+loadBodyLog();
+loadAudit();
 </script>
 </body>
 </html>

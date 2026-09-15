@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/subtle"
 	"io"
+	"log"
 	"math"
 	"net"
 	"net/http"
@@ -21,9 +22,10 @@ type admin struct {
 	password string
 	// invalidateModels/invalidatePrices 通知数据面失效对应缓存
 	// （渠道或模型变更、价格变更时调用，漏调会导致最长 60 秒脏数据）。
-	invalidateModels func()
-	invalidatePrices func()
-	alerts           *alertManager
+	invalidateModels  func()
+	invalidatePrices  func()
+	invalidateBodyLog func()
+	alerts            *alertManager
 
 	mu       sync.Mutex
 	sessions map[string]time.Time
@@ -51,6 +53,11 @@ func (a *admin) register(mux *http.ServeMux) {
 	mux.Handle("POST /api/admin/channels/{id}/keys/{key_id}/disable", a.auth(a.disableChannelKey))
 	mux.Handle("POST /api/admin/channels/{id}/models/disable/{model...}", a.auth(a.disableChannelModel))
 	mux.Handle("POST /api/admin/channels/{id}/models/enable/{model...}", a.auth(a.enableChannelModel))
+	mux.Handle("GET /api/admin/audit", a.auth(a.listAudit))
+	mux.Handle("GET /api/admin/bodylog", a.auth(a.getBodyLog))
+	mux.Handle("PUT /api/admin/bodylog", a.auth(a.putBodyLog))
+	mux.Handle("GET /api/admin/bodylog/{id}", a.auth(a.getRequestBody))
+	mux.Handle("POST /api/admin/bodylog/{id}/replay", a.auth(a.replayBody))
 	mux.Handle("GET /api/admin/keys", a.auth(a.listKeys))
 	mux.Handle("POST /api/admin/keys", a.auth(a.createKey))
 	mux.Handle("PUT /api/admin/keys/{id}", a.auth(a.updateKey))
@@ -71,16 +78,23 @@ func (a *admin) register(mux *http.ServeMux) {
 
 func (a *admin) auth(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		a.mu.Lock()
-		exp, ok := a.sessions[tok]
-		a.mu.Unlock()
-		if tok == "" || !ok || time.Now().After(exp) {
+		if !a.hasSession(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
 		next(w, r)
 	})
+}
+
+// hasSession 报告令牌是否为有效的管理会话（/metrics 反代访问鉴权复用）。
+func (a *admin) hasSession(tok string) bool {
+	if tok == "" {
+		return false
+	}
+	a.mu.Lock()
+	exp, ok := a.sessions[tok]
+	a.mu.Unlock()
+	return ok && time.Now().Before(exp)
 }
 
 func (a *admin) login(w http.ResponseWriter, r *http.Request) {
@@ -334,6 +348,7 @@ func (a *admin) createChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.invalidateModels()
+	a.audit(r, "channel.create", in.Name)
 	writeJSON(w, http.StatusOK, map[string]int64{"id": id})
 }
 
@@ -399,6 +414,7 @@ func (a *admin) updateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.invalidateModels()
+	a.audit(r, "channel.update", in.Name+" (#"+strconv.FormatInt(id, 10)+")")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -425,6 +441,7 @@ func (a *admin) disableChannelModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.invalidateModels()
+	a.audit(r, "channel.model.disable", model)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -441,6 +458,7 @@ func (a *admin) enableChannelModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.invalidateModels()
+	a.audit(r, "channel.model.enable", model)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -451,6 +469,7 @@ func (a *admin) deleteChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.invalidateModels()
+	a.audit(r, "channel.delete", "#"+strconv.FormatInt(id, 10))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -501,6 +520,8 @@ func (a *admin) setChannelKey(w http.ResponseWriter, r *http.Request, enabled bo
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "channel key not found"})
 		return
 	}
+	a.audit(r, "channel.key."+map[bool]string{true: "enable", false: "disable"}[enabled],
+		"key #"+strconv.FormatInt(keyID, 10))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -518,18 +539,22 @@ func maskApiKey(k string) string {
 }
 
 type apiKeyOut struct {
-	ID            int64    `json:"id"`
-	Key           string   `json:"key"` // 打码后的密钥，明文需经 reveal 端点按需获取
-	Name          string   `json:"name"`
-	AllowedModels []string `json:"allowed_models"`
-	Enabled       bool     `json:"enabled"`
-	CreatedAt     string   `json:"created_at"`
-	ExpiresAt     string   `json:"expires_at"`
-	RPMLimit      int64    `json:"rpm_limit"`
-	TPMLimit      int64    `json:"tpm_limit"`
-	BudgetUSD     float64  `json:"budget_usd"`
-	BudgetPeriod  string   `json:"budget_period"`
-	BudgetTokens  int64    `json:"budget_tokens"`
+	ID               int64             `json:"id"`
+	Key              string            `json:"key"` // 打码后的密钥，明文需经 reveal 端点按需获取
+	Name             string            `json:"name"`
+	AllowedModels    []string          `json:"allowed_models"`
+	Enabled          bool              `json:"enabled"`
+	CreatedAt        string            `json:"created_at"`
+	ExpiresAt        string            `json:"expires_at"`
+	RPMLimit         int64             `json:"rpm_limit"`
+	TPMLimit         int64             `json:"tpm_limit"`
+	BudgetUSD        float64           `json:"budget_usd"`
+	BudgetPeriod     string            `json:"budget_period"`
+	BudgetTokens     int64             `json:"budget_tokens"`
+	AppName          string            `json:"app_name"`
+	ModelAlias       map[string]string `json:"model_alias"`
+	MaxTokensCap     int64             `json:"max_tokens_cap"`
+	ConcurrencyLimit int64             `json:"concurrency_limit"`
 	// auto 路由配置（模型名传 "auto" 时生效）
 	AutoMode     string   `json:"auto_mode"`
 	AutoModels   []string `json:"auto_models"`
@@ -564,6 +589,8 @@ func (a *admin) listKeys(w http.ResponseWriter, _ *http.Request) {
 			ExpiresAt: k.ExpiresAt, RPMLimit: k.RPMLimit, TPMLimit: k.TPMLimit,
 			BudgetUSD: k.BudgetUSD, BudgetPeriod: k.BudgetPeriod, BudgetTokens: k.BudgetTokens,
 			AutoMode: k.AutoMode, AutoModels: k.AutoModels, AutoPriority: k.AutoPriority,
+			AppName: k.AppName, ModelAlias: k.ModelAlias,
+			MaxTokensCap: k.MaxTokensCap, ConcurrencyLimit: k.ConcurrencyLimit,
 			AvgTps: tps, RecentReqs: recent,
 		})
 	}
@@ -596,6 +623,11 @@ type keyAutoIn struct {
 	AutoMode     string   `json:"auto_mode"` // latency | balance | priority | smart
 	AutoModels   []string `json:"auto_models"`
 	AutoPriority []string `json:"auto_priority"`
+	// 应用归因固化 / 模型别名 / 消费封顶（批次三）
+	AppName          string            `json:"app_name"`
+	ModelAlias       map[string]string `json:"model_alias"`
+	MaxTokensCap     int64             `json:"max_tokens_cap"`
+	ConcurrencyLimit int64             `json:"concurrency_limit"`
 }
 
 func (in keyAutoIn) validate() string {
@@ -624,11 +656,14 @@ func (a *admin) createKey(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: req.ExpiresAt, RPMLimit: req.RPMLimit, TPMLimit: req.TPMLimit,
 		BudgetUSD: req.BudgetUSD, BudgetPeriod: req.BudgetPeriod, BudgetTokens: req.BudgetTokens,
 		AutoMode: req.AutoMode, AutoModels: req.AutoModels, AutoPriority: req.AutoPriority,
+		AppName: req.AppName, ModelAlias: req.ModelAlias,
+		MaxTokensCap: req.MaxTokensCap, ConcurrencyLimit: req.ConcurrencyLimit,
 	}
 	if err := a.st.CreateAPIKey(k); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	a.audit(r, "key.create", req.Name)
 	writeJSON(w, http.StatusOK, k)
 }
 
@@ -658,11 +693,14 @@ func (a *admin) updateKey(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: req.ExpiresAt, RPMLimit: req.RPMLimit, TPMLimit: req.TPMLimit,
 		BudgetUSD: req.BudgetUSD, BudgetPeriod: req.BudgetPeriod, BudgetTokens: req.BudgetTokens,
 		AutoMode: req.AutoMode, AutoModels: req.AutoModels, AutoPriority: req.AutoPriority,
+		AppName: req.AppName, ModelAlias: req.ModelAlias,
+		MaxTokensCap: req.MaxTokensCap, ConcurrencyLimit: req.ConcurrencyLimit,
 	}
 	if err := a.st.UpdateAPIKey(k); err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
 		return
 	}
+	a.audit(r, "key.update", req.Name+" (#"+strconv.FormatInt(id, 10)+")")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -672,7 +710,32 @@ func (a *admin) deleteKey(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
 		return
 	}
+	a.audit(r, "key.delete", "#"+strconv.FormatInt(id, 10))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// audit 记录一条管理操作审计（detail 只含名称/ID，严禁密钥明文或令牌）。
+func (a *admin) audit(r *http.Request, action, detail string) {
+	ip := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		ip = host
+	}
+	if fwd := r.Header.Get("X-Real-IP"); fwd != "" {
+		ip = fwd
+	}
+	if err := a.st.InsertAudit(action, detail, ip); err != nil {
+		log.Printf("audit %s: %v", action, err)
+	}
+}
+
+func (a *admin) listAudit(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	rows, err := a.st.ListAudit(limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
 }
 
 func (a *admin) listLogs(w http.ResponseWriter, r *http.Request) {
@@ -761,6 +824,7 @@ func (a *admin) upsertPrice(w http.ResponseWriter, r *http.Request) {
 	if a.invalidatePrices != nil {
 		a.invalidatePrices()
 	}
+	a.audit(r, "price.upsert", in.Model)
 	writeJSON(w, http.StatusOK, p)
 }
 
@@ -800,5 +864,6 @@ func (a *admin) deletePrice(w http.ResponseWriter, r *http.Request) {
 	if a.invalidatePrices != nil {
 		a.invalidatePrices()
 	}
+	a.audit(r, "price.delete", model)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

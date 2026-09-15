@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -180,6 +182,49 @@ func (s *Store) PruneLogs(days int) (int64, error) {
 	}
 	res, err := s.DB.Exec(`DELETE FROM request_logs WHERE ts < datetime('now', ?)`,
 		fmt.Sprintf("-%d days", days))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// RequestBody 是一笔请求的采样正文（仅非流式；req/resp 截断到配置上限）。
+type RequestBody struct {
+	LogID    int64  `json:"log_id"`
+	Ts       string `json:"ts"`
+	Model    string `json:"model"`
+	APIKeyID int64  `json:"api_key_id"`
+	ReqBody  string `json:"req_body"`
+	RespBody string `json:"resp_body"`
+}
+
+// InsertRequestBody 落一条采样正文。
+func (s *Store) InsertRequestBody(logID int64, model string, apiKeyID int64, reqBody, respBody string) error {
+	_, err := s.DB.Exec(
+		`INSERT INTO request_bodies(log_id, model, api_key_id, req_body, resp_body) VALUES(?, ?, ?, ?, ?)`,
+		logID, model, apiKeyID, reqBody, respBody)
+	return err
+}
+
+// GetRequestBody 取回采样正文；未留存返回 ErrNotFound。
+func (s *Store) GetRequestBody(logID int64) (*RequestBody, error) {
+	var rb RequestBody
+	err := s.DB.QueryRow(
+		`SELECT log_id, ts, model, api_key_id, req_body, resp_body FROM request_bodies WHERE log_id = ?`, logID,
+	).Scan(&rb.LogID, &rb.Ts, &rb.Model, &rb.APIKeyID, &rb.ReqBody, &rb.RespBody)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &rb, nil
+}
+
+// PruneRequestBodies 清理超过天数（按 UTC 天）的采样正文，返回删除行数。
+func (s *Store) PruneRequestBodies(days int) (int64, error) {
+	res, err := s.DB.Exec(
+		`DELETE FROM request_bodies WHERE ts < datetime('now', ?)`, fmt.Sprintf("-%d days", days))
 	if err != nil {
 		return 0, err
 	}

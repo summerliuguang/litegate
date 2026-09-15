@@ -452,6 +452,10 @@ func (p *proxy) serveResponses(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// 密钥级模型别名（auto 不参与）
+	if target := ak.AliasTarget(in.Model); target != "" {
+		in.Model = target
+	}
 	chans = enabledOnly(chans)
 	// auto 路由：解析候选序列（priority 模式给完整序列做跨模型故障转移），
 	// 转换/渠道路由/日志/计费都走解析结果
@@ -505,9 +509,23 @@ func (p *proxy) serveResponses(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, code, map[string]string{"error": msg})
 		return
 	}
+	release, ok := p.limits.enter(ak)
+	if !ok {
+		w.Header().Set("Retry-After", "5")
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limited: concurrency limit reached for this api key"})
+		return
+	}
+	defer release()
+
+	if ak.MaxTokensCap > 0 && in.MaxOutputTokens != nil && *in.MaxOutputTokens > ak.MaxTokensCap {
+		in.MaxOutputTokens = &ak.MaxTokensCap
+	}
 
 	start := time.Now()
 	app := inboundApp(r)
+	if ak.AppName != "" {
+		app = ak.AppName
+	}
 	// 按候选序列依次 dispatch；每个候选以 in.Model 重建 chat 请求体
 	// （流式请求补 stream_options.include_usage；上游 400 时去掉重试一次）
 	tryModels := []string{in.Model}

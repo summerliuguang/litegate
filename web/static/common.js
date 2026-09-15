@@ -36,7 +36,7 @@ const NAV_ITEMS = [
   { id: 'logs',       href: '/logs.html',        icon: '', label: '请求日志' },
   { id: 'prices',     href: '/prices.html',      icon: '', label: '模型价格' },
   { id: 'playground', href: '/playground.html',  icon: '', label: '对话测试' },
-  { id: 'settings',   href: '/settings.html',    icon: '', label: '告警设置' },
+  { id: 'settings',   href: '/settings.html',    icon: '', label: '设置' },
 ];
 
 function renderNav() {

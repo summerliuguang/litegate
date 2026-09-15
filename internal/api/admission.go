@@ -30,6 +30,7 @@ type keyAdmission struct {
 	tpm    map[int64][]tokPoint
 	day    map[int64]*windowUse
 	month  map[int64]*windowUse
+	cur    map[int64]int64 // 密钥级并发在请求数（ConcurrencyLimit>0 时维护）
 }
 
 func newKeyAdmission(alerts *alertManager) *keyAdmission {
@@ -39,6 +40,7 @@ func newKeyAdmission(alerts *alertManager) *keyAdmission {
 		tpm:    map[int64][]tokPoint{},
 		day:    map[int64]*windowUse{},
 		month:  map[int64]*windowUse{},
+		cur:    map[int64]int64{},
 	}
 }
 
@@ -59,6 +61,25 @@ func (a *keyAdmission) load(st *store.Store) {
 			a.month[k.ID] = &windowUse{label: monthLabel(), cost: c, tokens: t}
 		}
 	}
+}
+
+// enter 密钥并发上限准入：返回释放函数与是否放行。limit<=0 恒放行零开销。
+// 须在 admit 通过后调用，释放用 defer。
+func (a *keyAdmission) enter(ak *store.APIKey) (release func(), ok bool) {
+	if ak.ConcurrencyLimit <= 0 {
+		return func() {}, true
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cur[ak.ID] >= ak.ConcurrencyLimit {
+		return nil, false
+	}
+	a.cur[ak.ID]++
+	return func() {
+		a.mu.Lock()
+		a.cur[ak.ID]--
+		a.mu.Unlock()
+	}, true
 }
 
 func dayLabel() string   { return time.Now().UTC().Format("2006-01-02") }

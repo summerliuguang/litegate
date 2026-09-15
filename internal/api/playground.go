@@ -36,7 +36,17 @@ func (a *admin) playgroundModels(w http.ResponseWriter, r *http.Request) {
 	for _, it := range items {
 		ids = append(ids, it.ID)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"models": ids})
+	// 价格随模型一并下发（对比/成本预估在前端本地计算，免二次请求）
+	prices := map[string]map[string]any{}
+	if ps, err := a.st.ListModelPrices(); err == nil {
+		for _, pr := range ps {
+			prices[pr.Model] = map[string]any{
+				"input": pr.InputPrice, "output": pr.OutputPrice,
+				"cache_read": pr.CacheReadPrice, "currency": pr.Currency,
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"models": ids, "prices": prices})
 }
 
 // playgroundChat 把对话请求交给数据面：挑一把可用虚拟密钥，默认流式（TTS 等音频
