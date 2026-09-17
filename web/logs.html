@@ -54,6 +54,8 @@
           <input class="input is-small" id="qChannel" type="number" min="1" placeholder="可选"></div>
         <div class="column is-2"><label class="label is-size-7">密钥 ID</label>
           <input class="input is-small" id="qKey" type="number" min="1" placeholder="可选"></div>
+        <div class="column is-2"><label class="label is-size-7">请求 ID</label>
+          <input class="input is-small" id="qId" type="number" min="1" placeholder="直达单条"></div>
         <div class="column"><label class="label is-size-7">起始时间（本地时区）</label>
           <input class="input is-small" id="qSince" type="datetime-local"></div>
         <div class="column"><label class="label is-size-7">结束时间</label>
@@ -130,12 +132,14 @@ function filterQuery(extra = {}) {
   const status = document.getElementById('qStatus').value;
   const ch = document.getElementById('qChannel').value;
   const key = document.getElementById('qKey').value;
+  const rid = document.getElementById('qId').value;
   const since = localToUTC(document.getElementById('qSince').value);
   const until = localToUTC(document.getElementById('qUntil').value);
   if (app) q.set('app', app);
   if (status) q.set('status', status);
   if (ch) q.set('channel_id', ch);
   if (key) q.set('api_key_id', key);
+  if (rid) q.set('id', rid);
   if (since) q.set('since', since);
   if (until) q.set('until', until);
   for (const [k, v] of Object.entries(extra)) q.set(k, v);
@@ -221,6 +225,7 @@ async function loadList(append) {
           <span class="r-time mono">${fmtTs(l.ts)}</span>
           ${l.app ? `<span class="tag is-link is-light is-size-7">${esc(l.app)}</span>` : ''}
           <span class="r-right">
+            <span class="mono">#${l.id}</span>
             <span class="mono">${fmtInt(l.prompt_tokens)}↑ ${fmtInt(l.completion_tokens)}↓</span>
             <span class="mono">${fmtCur(l.cost_usd, l.currency || 'USD')}</span>
           </span>
@@ -253,6 +258,7 @@ function showDetail(l, chName, keyName) {
   const tps = (l.completion_tokens > 0 && l.latency_ms > l.ttfb_ms)
     ? (l.completion_tokens / ((l.latency_ms - l.ttfb_ms) / 1000)).toFixed(1) + ' tok/s' : '--';
   document.getElementById('detailBody').innerHTML = [
+    kv('请求 ID', `<span class="mono">${l.id}</span> <button class="button is-small" style="margin-left:.4rem" onclick="copyLogId(${l.id})">复制 ID</button>`),
     kv('时间', `<span class="mono">${fmtTs(l.ts)}</span>`),
     kv('模型', `<span class="mono">${esc(l.model)}</span>`),
     kv('协议', esc(l.protocol)),
@@ -297,14 +303,27 @@ document.getElementById('detailOk').addEventListener('click', () => document.get
 document.querySelector('#detailModal .modal-background').addEventListener('click', () => document.getElementById('detailModal').classList.remove('is-active'));
 
 // ===== 过滤器 =====
+window.copyLogId = function (id) { copyText(String(id)); };
+
+// 带 id 时直接跳到该条日志的列表视图（支持从别处粘贴 /logs.html?id=123 直达）
+function openIdFilter(idv) {
+  curModel = '';
+  document.getElementById('listTitle').textContent = '请求 ID ' + idv;
+  listOffset = 0;
+  setView('list');
+  loadList(false);
+}
+
 document.getElementById('formFilter').addEventListener('submit', e => {
   e.preventDefault();
   document.getElementById('qModel').value = ''; // 模型条件由钻取层级控制
+  const idv = document.getElementById('qId').value.trim();
+  if (idv) { openIdFilter(idv); return; }
   setView('models');
   loadModels();
 });
 document.getElementById('btnReset').addEventListener('click', () => {
-  ['qModel', 'qApp', 'qChannel', 'qKey', 'qSince', 'qUntil'].forEach(id => document.getElementById(id).value = '');
+  ['qModel', 'qApp', 'qChannel', 'qKey', 'qId', 'qSince', 'qUntil'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('qStatus').value = '';
   setView('models');
   loadModels();
@@ -316,7 +335,16 @@ async function loadRefs() {
   } catch (_) { /* 仅影响展示名，失败不阻塞 */ }
 }
 
-(async () => { await loadRefs(); await loadModels(); })();
+(async () => {
+  await loadRefs();
+  const urlId = new URLSearchParams(location.search).get('id');
+  if (urlId && /^\d+$/.test(urlId)) {
+    document.getElementById('qId').value = urlId;
+    openIdFilter(urlId);
+    return;
+  }
+  await loadModels();
+})();
 </script>
 </body>
 </html>

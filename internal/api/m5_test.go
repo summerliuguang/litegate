@@ -42,8 +42,8 @@ func TestDashboardLatencyAndApp(t *testing.T) {
 	out := do(srv, "GET", "/api/admin/dashboard", "",
 		map[string]string{"Authorization": "Bearer " + login.Token})
 	var d struct {
-		LatencyP50Ms int64  `json:"latency_p50_ms"`
-		LatencyP95Ms int64  `json:"latency_p95_ms"`
+		LatencyP50Ms int64   `json:"latency_p50_ms"`
+		LatencyP95Ms int64   `json:"latency_p95_ms"`
 		AvgTps       float64 `json:"avg_tps"`
 		ByApp        []struct {
 			App      string  `json:"app"`
@@ -137,7 +137,8 @@ func TestConfigExportImportRoundtrip(t *testing.T) {
 	if strings.Contains(out.Body.String(), "kk-1") {
 		t.Fatalf("默认导出泄露明文密钥: %s", out.Body.String())
 	}
-	// 带 include_keys：导出明文供迁移
+	// 带 include_keys：导出明文供迁移（新增强制 X-Admin-Password 二次确认）
+	hdr = map[string]string{"Authorization": "Bearer " + login.Token, "X-Admin-Password": "testpw"}
 	out = do(srvSrc, "GET", "/api/admin/config/export?include_keys=1", "", hdr)
 	if !strings.Contains(out.Body.String(), "kk-1") || !strings.Contains(out.Body.String(), "kk-2") {
 		t.Fatalf("include_keys 导出缺明文: %s", out.Body.String())
@@ -323,13 +324,16 @@ func TestDeepHealthz(t *testing.T) {
 	var h struct {
 		Status        string `json:"status"`
 		Version       string `json:"version"`
-		Db            string `json:"db"`
+		DbRead        string `json:"db_read"`
+		DbWrite       string `json:"db_write"`
+		Crypto        string `json:"crypto"`
 		UptimeSeconds int64  `json:"uptime_seconds"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &h); err != nil {
 		t.Fatal(err)
 	}
-	if h.Status != "ok" || h.Db != "ok" || h.Version == "" || h.UptimeSeconds < 0 {
+	if h.Status != "ok" || h.DbRead != "ok" || h.DbWrite != "ok" || h.Crypto != "ok" ||
+		h.Version == "" || h.UptimeSeconds < 0 {
 		t.Fatalf("deep healthz = %+v", h)
 	}
 	// 普通 healthz 保持轻量形状

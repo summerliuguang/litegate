@@ -3,6 +3,7 @@ package api
 // M5 运维与管理面扩展：SQLite 备份、配置导入导出、渠道模型自动发现。
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"net/http"
 	"sort"
@@ -15,12 +16,13 @@ import (
 // ---- SQLite 备份 ----
 
 // backupDB 在线备份：POST /api/admin/db/backup → {file,size,created}
-func (a *admin) backupDB(w http.ResponseWriter, _ *http.Request) {
+func (a *admin) backupDB(w http.ResponseWriter, r *http.Request) {
 	info, err := a.st.Backup()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	a.audit(r, "db.backup", info.File)
 	writeJSON(w, http.StatusOK, info)
 }
 
@@ -53,16 +55,22 @@ type exportedChannel struct {
 }
 
 type configExport struct {
-	ExportedAt string            `json:"exported_at"`
-	Channels   []exportedChannel `json:"channels"`
+	ExportedAt string             `json:"exported_at"`
+	Channels   []exportedChannel  `json:"channels"`
 	Prices     []store.ModelPrice `json:"prices"`
 }
 
 // exportConfig 导出渠道与价格配置：GET /api/admin/config/export?include_keys=1。
 // 默认不导出明文密钥（只给打码值，导入时按名字沿用库里已有密钥）；
-// include_keys=1 导出明文——产出文件等同凭证，务必妥善保管。
+// include_keys=1 导出明文——产出文件等同凭证，除管理令牌外还要求请求头
+// X-Admin-Password 携带当前管理密码做二次确认，并记审计日志。
 func (a *admin) exportConfig(w http.ResponseWriter, r *http.Request) {
 	includeKeys := r.URL.Query().Get("include_keys") == "1"
+	if includeKeys && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Admin-Password")), []byte(a.password)) != 1 {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "导出明文密钥需要请求头 X-Admin-Password 携带当前管理密码做二次确认"})
+		return
+	}
 	chans, err := a.st.ListChannels("")
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -75,6 +83,7 @@ func (a *admin) exportConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	out := configExport{ExportedAt: time.Now().UTC().Format("2006-01-02 15:04:05"),
 		Channels: []exportedChannel{}, Prices: prices}
+	plainKeys := 0
 	for _, c := range chans {
 		ec := exportedChannel{
 			Name: c.Name, Type: c.Type, BaseURL: c.BaseURL,
@@ -85,9 +94,15 @@ func (a *admin) exportConfig(w http.ResponseWriter, r *http.Request) {
 			ec.KeysMasked = append(ec.KeysMasked, store.MaskKey(k.Key))
 			if includeKeys && k.Enabled {
 				ec.APIKeys = append(ec.APIKeys, k.Key)
+				plainKeys++
 			}
 		}
 		out.Channels = append(out.Channels, ec)
+	}
+	if includeKeys {
+		a.audit(r, "config.export", fmt.Sprintf("channels=%d 明文密钥=%d", len(out.Channels), plainKeys))
+	} else {
+		a.audit(r, "config.export", fmt.Sprintf("channels=%d (不含密钥)", len(out.Channels)))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -154,6 +169,7 @@ func (a *admin) importConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	a.invalidateModels()
 	a.invalidatePrices()
+	a.audit(r, "config.import", fmt.Sprintf("channels=%d prices=%d errors=%d", imported, prices, len(errs)))
 	resp := map[string]any{"channels_upserted": imported, "prices_upserted": prices}
 	if len(errs) > 0 {
 		resp["errors"] = errs

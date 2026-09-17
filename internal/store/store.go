@@ -110,11 +110,14 @@ func Open(path string, secret []byte) (*Store, error) {
 			return nil, err
 		}
 	}
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", "file:"+path+
+		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)")
 	if err != nil {
 		return nil, err
 	}
 	// 单连接串行化读写，规避 SQLite 锁竞争；日志批量落库的优化留到用量统计阶段。
+	// synchronous=NORMAL 在 WAL 下不牺牲崩溃一致性（只可能丢最后的事务，不损坏库），
+	// 每笔请求日志一次 INSERT 的 fsync 开销显著下降。
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()

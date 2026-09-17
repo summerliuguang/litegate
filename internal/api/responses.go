@@ -449,7 +449,7 @@ func (p *proxy) serveResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	chans, err := p.st.ListChannels("openai")
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternalError(w, r, err)
 		return
 	}
 	// 密钥级模型别名（auto 不参与）
@@ -596,7 +596,7 @@ func (p *proxy) serveResponses(w http.ResponseWriter, r *http.Request) {
 		p.respondResponsesStream(w, ak, c, &in, resp, start, app)
 		return
 	}
-	p.respondResponsesJSON(w, ak, c, &in, resp, start, app)
+	p.respondResponsesJSON(w, r, ak, c, &in, resp, start, app)
 }
 
 // serveResponsesStored 网关无状态：对已存 Responses 对象的取回/删除明确报 501。
@@ -605,7 +605,7 @@ func (p *proxy) serveResponsesStored(w http.ResponseWriter, _ *http.Request) {
 		"error": "stateless gateway: stored responses are not supported; keep full state client-side"})
 }
 
-func (p *proxy) respondResponsesJSON(w http.ResponseWriter, ak *store.APIKey, c *store.Channel,
+func (p *proxy) respondResponsesJSON(w http.ResponseWriter, r *http.Request, ak *store.APIKey, c *store.Channel,
 	in *responsesRequest, resp *http.Response, start time.Time, app string) {
 	defer resp.Body.Close()
 	ttfb := time.Since(start)
@@ -636,7 +636,7 @@ func (p *proxy) respondResponsesJSON(w http.ResponseWriter, ak *store.APIKey, c 
 	}
 	out, err := json.Marshal(chatToResponses(in, &cc))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternalError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

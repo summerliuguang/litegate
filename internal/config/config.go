@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"os"
+	"strings"
 )
 
 type Config struct {
@@ -15,6 +16,9 @@ type Config struct {
 	Secret string
 	// LogRetentionDays 为请求日志保留天数；0 表示永久保留。
 	LogRetentionDays int
+	// PanelHosts 是面板对外服务的 Host 白名单（host:port）。SSO 回跳地址只从
+	// 白名单里选，防止伪造 Host 头构造任意回跳（开放重定向）。空 = api 包内置默认。
+	PanelHosts []string
 }
 
 // ErrWeakPassword 在未设置管理密码（或仍是演示默认值）时返回，
@@ -33,7 +37,19 @@ func Load(addr, dbPath string) (Config, error) {
 		AdminPassword:    pw,
 		Secret:           os.Getenv("LITEGATE_SECRET"),
 		LogRetentionDays: retention,
+		PanelHosts:       parseListEnv("LITEGATE_PANEL_HOSTS"),
 	}, nil
+}
+
+// parseListEnv 解析逗号分隔的环境变量；未设置或全空时返回 nil（调用方回退默认值）。
+func parseListEnv(name string) []string {
+	var out []string
+	for _, p := range strings.Split(os.Getenv(name), ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func atoiEnv(name string) int {

@@ -13,7 +13,10 @@
 <div class="wrap">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
     <h1 class="title is-4" style="margin:0">渠道管理</h1>
-    <button class="button is-link" id="btnNew">＋ 新建渠道</button>
+    <div class="is-flex" style="gap:.5rem">
+      <button class="button" id="btnTestAll">全部测试</button>
+      <button class="button is-link" id="btnNew">＋ 新建渠道</button>
+    </div>
   </div>
   <p class="is-size-7 has-text-grey" style="margin-bottom:.8rem">
     按优先级降序、同级按权重加权轮询；上游故障自动转移到下一优先级。base_url 需含版本前缀（如 <code>https://api.openai.com/v1</code>）。
@@ -88,6 +91,27 @@
     <footer class="modal-card-foot">
       <button class="button is-link" id="mSave">保存</button>
       <button class="button" id="mCancel">取消</button>
+    </footer>
+  </div>
+</div>
+
+<!-- 全部测试模态框 -->
+<div class="modal" id="testModal">
+  <div class="modal-background"></div>
+  <div class="modal-card">
+    <header class="modal-card-head"><p class="modal-card-title">渠道连通性测试</p>
+      <button class="delete" id="testClose" aria-label="close"></button></header>
+    <section class="modal-card-body">
+      <div class="table-container">
+        <table class="table is-fullwidth is-size-7 mobile-cards">
+          <thead><tr><th>渠道</th><th>结果</th><th>平均延迟</th></tr></thead>
+          <tbody id="testRows"></tbody>
+        </table>
+      </div>
+      <p class="help is-size-7 has-text-grey">逐渠道并发测试（每渠道内逐把密钥打上游 /models），延迟为正常密钥的平均值</p>
+    </section>
+    <footer class="modal-card-foot">
+      <button class="button" id="testDone">关闭</button>
     </footer>
   </div>
 </div>
@@ -320,6 +344,46 @@ window.testCh = async function (id) {
     toast(parts.length ? parts.join('\n') : '无密钥可测', r.ok);
   } catch (ex) { toast('测试请求失败：' + ex.message, false); }
 };
+
+// ---- 全部测试：逐渠道并发（4 路）调用单渠道测试接口，结果落表 ----
+function closeTestModal() { document.getElementById('testModal').classList.remove('is-active'); }
+document.getElementById('testClose').addEventListener('click', closeTestModal);
+document.getElementById('testDone').addEventListener('click', closeTestModal);
+document.querySelector('#testModal .modal-background').addEventListener('click', closeTestModal);
+document.getElementById('btnTestAll').addEventListener('click', async () => {
+  if (!channels.length) { toast('还没有渠道可测', false); return; }
+  document.getElementById('testRows').innerHTML = channels.map(c =>
+    `<tr id="testrow-${c.id}"><td class="cell-col"><b>${esc(c.name)}</b></td>` +
+    `<td data-label="结果"><span class="has-text-grey">测试中…</span></td><td data-label="平均延迟">--</td></tr>`).join('');
+  document.getElementById('testModal').classList.add('is-active');
+  const queue = [...channels];
+  const worker = async () => {
+    while (queue.length) {
+      const c = queue.shift();
+      const row = document.getElementById(`testrow-${c.id}`);
+      try {
+        // 该端点恒 200：body.keys 逐把密钥给结果
+        const r = await api(`/api/admin/channels/${c.id}/test`, { method: 'POST' });
+        const keys = r.keys || [];
+        const oks = keys.filter(k => k.ok);
+        const lat = oks.length
+          ? Math.round(oks.reduce((s, k) => s + (k.latency_ms || 0), 0) / oks.length) + 'ms'
+          : '--';
+        const errs = keys.filter(k => !k.ok).map(k => k.error || '').join('；').slice(0, 200);
+        row.innerHTML = `<td class="cell-col"><b>${esc(c.name)}</b></td>` +
+          `<td data-label="结果">${keys.length
+            ? `<span class="${r.ok ? 'status ok' : 'has-text-danger'}">${oks.length}/${keys.length} 把正常</span>`
+            : '<span class="has-text-grey">无密钥</span>'}${errs ? `<br><span class="is-size-7 has-text-danger" style="word-break:break-all">${esc(errs)}</span>` : ''}</td>` +
+          `<td data-label="平均延迟" class="mono">${lat}</td>`;
+      } catch (ex) {
+        row.innerHTML = `<td class="cell-col"><b>${esc(c.name)}</b></td>` +
+          `<td data-label="结果"><span class="has-text-danger">请求失败：${esc(ex.message)}</span></td>` +
+          `<td data-label="平均延迟">--</td>`;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, channels.length) }, worker));
+});
 
 window.balanceCh = async function (id) {
   toast('正在查询上游余额…');

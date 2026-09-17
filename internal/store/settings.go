@@ -6,6 +6,10 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"time"
+
+	"litegate/internal/cryptoutil"
 )
 
 // GetSetting 读取单个设置项；不存在返回 ErrNotFound。
@@ -27,6 +31,35 @@ func (s *Store) SetSetting(key, value string) error {
 		`INSERT INTO settings(key, value) VALUES(?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
 	return err
+}
+
+// HealthCheck 深度健康检查的存储侧探测：真实写一遍 settings 并读回（验证库
+// 可写、WAL 正常），再做一次加解密往返（验证主密钥可用——密钥失效时渠道凭证
+// 全部取不出来，必须在健康检查里暴露）。返回首个失败项的错误；nil = 全部正常。
+func (s *Store) HealthCheck() error {
+	now := time.Now().UTC().Format("2006-01-02 15:04:05")
+	if err := s.SetSetting("health_ping", now); err != nil {
+		return fmt.Errorf("db write: %w", err)
+	}
+	v, err := s.GetSetting("health_ping")
+	if err != nil {
+		return fmt.Errorf("db readback: %w", err)
+	}
+	if v != now {
+		return errors.New("db readback mismatch")
+	}
+	enc, err := cryptoutil.Encrypt("health-check "+now, s.secret)
+	if err != nil {
+		return fmt.Errorf("encrypt: %w", err)
+	}
+	plain, err := cryptoutil.Decrypt(enc, s.secret)
+	if err != nil {
+		return fmt.Errorf("decrypt: %w", err)
+	}
+	if plain != "health-check "+now {
+		return errors.New("crypto roundtrip mismatch")
+	}
+	return nil
 }
 
 // AdminAudit 是一条管理操作审计记录（ts 为 UTC "YYYY-MM-DD HH:MM:SS"）。

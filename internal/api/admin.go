@@ -20,12 +20,16 @@ import (
 type admin struct {
 	st       *store.Store
 	password string
+	// panelHosts 是 SSO 回跳允许的 Host 白名单（host:port，见 NewServer）。
+	panelHosts []string
 	// invalidateModels/invalidatePrices 通知数据面失效对应缓存
 	// （渠道或模型变更、价格变更时调用，漏调会导致最长 60 秒脏数据）。
 	invalidateModels  func()
 	invalidatePrices  func()
 	invalidateBodyLog func()
-	alerts            *alertManager
+	// budgetUsage 读数据面内存中的密钥预算用量（与拦截同口径），列表页画进度条用。
+	budgetUsage func(*store.APIKey) (float64, int64)
+	alerts      *alertManager
 
 	mu       sync.Mutex
 	sessions map[string]time.Time
@@ -62,6 +66,7 @@ func (a *admin) register(mux *http.ServeMux) {
 	mux.Handle("POST /api/admin/keys", a.auth(a.createKey))
 	mux.Handle("PUT /api/admin/keys/{id}", a.auth(a.updateKey))
 	mux.Handle("GET /api/admin/keys/{id}/reveal", a.auth(a.revealKey))
+	mux.Handle("GET /api/admin/keys/{id}/usage", a.auth(a.keyUsage))
 	mux.Handle("DELETE /api/admin/keys/{id}", a.auth(a.deleteKey))
 	mux.Handle("GET /api/admin/channels/{id}/discover", a.auth(a.discoverChannelModels))
 	mux.Handle("POST /api/admin/db/backup", a.auth(a.backupDB))
@@ -100,18 +105,10 @@ func (a *admin) hasSession(tok string) bool {
 func (a *admin) login(w http.ResponseWriter, r *http.Request) {
 	// 登录限速：同一来源 IP 连续失败 5 次锁定 60 秒（内存态，重启即清零）
 	ip := clientIP(r)
-	a.mu.Lock()
-	if a.locked != nil {
-		if until, ok := a.locked[ip]; ok {
-			if time.Now().Before(until) {
-				a.mu.Unlock()
-				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many failed attempts, try later"})
-				return
-			}
-			delete(a.locked, ip)
-		}
+	if a.loginThrottled(ip) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many failed attempts, try later"})
+		return
 	}
-	a.mu.Unlock()
 
 	var req struct {
 		Password string `json:"password"`
@@ -120,16 +117,7 @@ func (a *admin) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(req.Password), []byte(a.password)) != 1 {
-		a.mu.Lock()
-		if a.locked == nil {
-			a.locked = map[string]time.Time{}
-		}
-		a.failures[ip]++
-		if a.failures[ip] >= 5 {
-			a.locked[ip] = time.Now().Add(60 * time.Second)
-			delete(a.failures, ip)
-		}
-		a.mu.Unlock()
+		a.loginFailed(ip)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "wrong password"})
 		return
 	}
@@ -146,13 +134,50 @@ func (a *admin) login(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
 
+// loginThrottled 报告该来源 IP 是否处于登录失败锁定中（已过期的锁定顺手清除）。
+func (a *admin) loginThrottled(ip string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	until, ok := a.locked[ip]
+	if !ok {
+		return false
+	}
+	if time.Now().Before(until) {
+		return true
+	}
+	delete(a.locked, ip)
+	return false
+}
+
+// loginFailed 记一次密码登录失败；连续 5 次锁定该 IP 60 秒。
+func (a *admin) loginFailed(ip string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.locked == nil {
+		a.locked = map[string]time.Time{}
+	}
+	a.failures[ip]++
+	if a.failures[ip] >= 5 {
+		a.locked[ip] = time.Now().Add(60 * time.Second)
+		delete(a.failures, ip)
+	}
+}
+
 // ssoVerifyClient 仅访问本机 sso 服务,超时从紧避免面板登录被拖住。
 var ssoVerifyClient = &http.Client{Timeout: 3 * time.Second}
 
 // ssoLogin 用家庭统一登录(SSO)的会话换取面板 token：转发浏览器 Cookie 到本机
 // sso 服务(/verify,仅监听回环)验证,通过即签发与管理密码登录同权的面板会话。
 // 这样面板既可以管理密码登录,也可以点"SSO 登录"走域账号,二者同权。
+// 凭据校验完全委托给 sso 服务,网关侧无从猜测,因此 SSO 会话无效不进入失败
+// 计数（避免 SSO 过期的正常用户反被锁住密码登录）；但锁定中的 IP 一并拒绝,
+// 与密码登录保持一致的攻击面。响应是 JSON 且无 CORS 头,跨站页面读不到,
+// 不涉及 OAuth 授权码语义,无需 state 防 CSRF。
 func (a *admin) ssoLogin(w http.ResponseWriter, r *http.Request) {
+	if a.loginThrottled(clientIP(r)) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many failed attempts, try later"})
+		return
+	}
 	cookie := r.Header.Get("Cookie")
 	if cookie == "" {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "no sso session"})
@@ -184,13 +209,29 @@ func (a *admin) ssoLogin(w http.ResponseWriter, r *http.Request) {
 
 // ssoRedirect 302 到家庭统一登录页,登录后原路回到面板根路径。
 // 登录页地址与 nginx 片段(sso-auth.conf)保持同一约定:29010 端口。
+// 回跳 Host 只从白名单里选——Host 头完全由客户端控制,直接拼进 back 参数
+// 会构成开放重定向。
 func (a *admin) ssoRedirect(w http.ResponseWriter, r *http.Request) {
-	scheme := "https"
-	if r.Header.Get("X-Forwarded-Proto") == "http" {
-		scheme = "http"
+	scheme := "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
 	}
-	back := scheme + "://" + r.Host + "/"
+	host := r.Host
+	if !a.hostAllowed(host) {
+		host = a.panelHosts[0]
+	}
+	back := scheme + "://" + host + "/"
 	http.Redirect(w, r, "https://192.168.5.15:29010/login?back="+url.QueryEscape(back), http.StatusFound)
+}
+
+// hostAllowed 报告 Host 是否在面板白名单里（大小写不敏感的精确匹配）。
+func (a *admin) hostAllowed(host string) bool {
+	for _, h := range a.panelHosts {
+		if strings.EqualFold(host, h) {
+			return true
+		}
+	}
+	return false
 }
 
 // clientIP 提取来源 IP（家庭内网直接 RemoteAddr；经 nginx 时 X-Real-IP 可信）。
@@ -480,27 +521,46 @@ func (a *admin) testChannel(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "channel not found"})
 		return
 	}
+	// 各密钥并行测试（fetchFromChannel 自带 8s 超时且不碰库，可安全并发），
+	// 多把密钥时不用串行等 N×超时；结果按原顺序返回。
 	ctx := r.Context()
 	type keyResult struct {
-		Masked string `json:"masked"`
-		OK     bool   `json:"ok"`
-		Models int    `json:"models,omitempty"`
-		Error  string `json:"error,omitempty"`
+		Masked    string `json:"masked"`
+		OK        bool   `json:"ok"`
+		Models    int    `json:"models,omitempty"`
+		LatencyMs int64  `json:"latency_ms,omitempty"`
+		Error     string `json:"error,omitempty"`
 	}
 	keys := c.APIKeys
-	results := make([]keyResult, 0, len(keys))
+	results := make([]keyResult, len(keys))
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for i, k := range keys {
+		wg.Add(1)
+		go func(i int, k store.ChannelKey) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			res := keyResult{Masked: store.MaskKey(k.Key)}
+			t0 := time.Now()
+			n, err := fetchFromChannel(ctx, upstreamClientForTest, c, k.Key)
+			res.LatencyMs = time.Since(t0).Milliseconds()
+			if err != nil {
+				res.Error = err.Error()
+			} else {
+				res.OK = true
+				res.Models = len(n)
+			}
+			results[i] = res
+		}(i, k)
+	}
+	wg.Wait()
 	okAll := len(keys) > 0
-	for _, k := range keys {
-		res := keyResult{Masked: store.MaskKey(k.Key)}
-		n, err := fetchFromChannel(ctx, upstreamClientForTest, c, k.Key)
-		if err != nil {
-			res.Error = err.Error()
+	for _, res := range results {
+		if !res.OK {
 			okAll = false
-		} else {
-			res.OK = true
-			res.Models = len(n)
+			break
 		}
-		results = append(results, res)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": okAll, "keys": results})
 }
@@ -562,6 +622,9 @@ type apiKeyOut struct {
 	// 近 7 天输出速度统计（成功且可计算的请求）
 	AvgTps     float64 `json:"avg_tps"`
 	RecentReqs int64   `json:"recent_requests"`
+	// 当前预算窗口已用（与拦截判定同口径；未配预算时为 0）
+	BudgetUsedUSD    float64 `json:"budget_used_usd"`
+	BudgetUsedTokens int64   `json:"budget_used_tokens"`
 }
 
 func (a *admin) listKeys(w http.ResponseWriter, _ *http.Request) {
@@ -583,6 +646,11 @@ func (a *admin) listKeys(w http.ResponseWriter, _ *http.Request) {
 			tps = math.Round(st.Tps()*10) / 10
 			recent = st.Requests
 		}
+		var usedCost float64
+		var usedTok int64
+		if a.budgetUsage != nil {
+			usedCost, usedTok = a.budgetUsage(k)
+		}
 		out = append(out, apiKeyOut{
 			ID: k.ID, Key: maskApiKey(k.Key), Name: k.Name,
 			AllowedModels: k.AllowedModels, Enabled: k.Enabled, CreatedAt: k.CreatedAt,
@@ -592,12 +660,14 @@ func (a *admin) listKeys(w http.ResponseWriter, _ *http.Request) {
 			AppName: k.AppName, ModelAlias: k.ModelAlias,
 			MaxTokensCap: k.MaxTokensCap, ConcurrencyLimit: k.ConcurrencyLimit,
 			AvgTps: tps, RecentReqs: recent,
+			BudgetUsedUSD: usedCost, BudgetUsedTokens: usedTok,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 // revealKey 返回密钥明文。列表接口默认只给打码值，明文按需获取，避免管理页一屏明文。
+// 取明文是敏感读操作，记入审计（detail 只含名称/ID，不含密钥本身）。
 func (a *admin) revealKey(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	k, err := a.st.GetAPIKey(id)
@@ -605,6 +675,7 @@ func (a *admin) revealKey(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
 		return
 	}
+	a.audit(r, "key.reveal", k.Name+" (#"+strconv.FormatInt(id, 10)+")")
 	writeJSON(w, http.StatusOK, map[string]string{"key": k.Key})
 }
 
@@ -714,6 +785,21 @@ func (a *admin) deleteKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// keyUsage 返回密钥近 N 天的按天用量（趋势图）：GET /api/admin/keys/{id}/usage?days=7|30
+func (a *admin) keyUsage(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+	if days != 7 && days != 30 {
+		days = 7
+	}
+	rows, err := a.st.KeyDailyUsage(id, days)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"days": days, "items": rows})
+}
+
 // audit 记录一条管理操作审计（detail 只含名称/ID，严禁密钥明文或令牌）。
 func (a *admin) audit(r *http.Request, action, detail string) {
 	ip := r.RemoteAddr
@@ -753,6 +839,7 @@ func (a *admin) listLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	f.ChannelID, _ = strconv.ParseInt(q.Get("channel_id"), 10, 64)
 	f.APIKeyID, _ = strconv.ParseInt(q.Get("api_key_id"), 10, 64)
+	f.ID, _ = strconv.ParseInt(q.Get("id"), 10, 64)
 	page, err := a.st.ListLogs(f)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

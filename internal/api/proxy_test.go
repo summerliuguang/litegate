@@ -19,7 +19,7 @@ func newTestServer(t *testing.T) (http.Handler, *store.Store) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	return NewServer(st, "testpw", nil), st
+	return NewServer(st, "testpw", nil, nil), st
 }
 
 func mustCreateChannel(t *testing.T, st *store.Store, typ, base string, models []string, priority int) int64 {

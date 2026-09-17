@@ -127,6 +127,22 @@
     </footer>
   </div>
 </div>
+<!-- 用量趋势模态框 -->
+<div class="modal" id="trendModal">
+  <div class="modal-background"></div>
+  <div class="modal-card">
+    <header class="modal-card-head"><p class="modal-card-title" id="trendTitle">用量趋势</p>
+      <button class="delete" id="tClose" aria-label="close"></button></header>
+    <section class="modal-card-body">
+      <div class="is-flex" style="gap:.4rem;margin-bottom:.7rem">
+        <button class="button is-small is-link" id="trend7">近 7 天</button>
+        <button class="button is-small" id="trend30">近 30 天</button>
+      </div>
+      <div id="trendBars"><p class="has-text-grey is-size-7">加载中…</p></div>
+      <p class="help is-size-7 has-text-grey">按 UTC 日聚合（与日志口径一致）；条长按请求数，右侧为请求量与 token 消耗</p>
+    </section>
+  </div>
+</div>
 <script src="/static/common.js"></script>
 <script>
 'use strict';
@@ -154,12 +170,32 @@ async function load() {
       const limits = [];
       if (k.rpm_limit) limits.push(k.rpm_limit + ' RPM');
       if (k.tpm_limit) limits.push(k.tpm_limit + ' TPM');
-      if (k.budget_usd) limits.push('$' + k.budget_usd + '/' + (k.budget_period === 'monthly' ? '月' : '日'));
-      if (k.budget_tokens) limits.push(k.budget_tokens.toLocaleString() + ' tok/' + (k.budget_period === 'monthly' ? '月' : '日'));
       if (k.expires_at) limits.push('至 ' + k.expires_at);
       if (k.app_name) limits.push('app=' + k.app_name);
       if (k.max_tokens_cap) limits.push('maxTok≤' + k.max_tokens_cap);
       if (k.concurrency_limit) limits.push('并发≤' + k.concurrency_limit);
+      // 预算消耗进度条（与网关拦截同口径的当前窗口用量）：≥80% 黄色预警，超支红色
+      const bp = k.budget_period === 'monthly' ? '月' : '日';
+      let budBar = '';
+      if (k.budget_usd || k.budget_tokens) {
+        let ratio = 0;
+        const parts = [];
+        if (k.budget_usd) {
+          ratio = Math.max(ratio, (k.budget_used_usd || 0) / k.budget_usd);
+          parts.push('$' + (k.budget_used_usd || 0).toFixed(2) + ' / $' + k.budget_usd);
+        }
+        if (k.budget_tokens) {
+          ratio = Math.max(ratio, (k.budget_used_tokens || 0) / k.budget_tokens);
+          parts.push(fmtInt(k.budget_used_tokens || 0) + ' / ' + fmtInt(k.budget_tokens) + ' tok');
+        }
+        const pct = Math.min(100, Math.round(ratio * 100));
+        const warn = ratio >= 0.8;
+        const color = ratio >= 1 ? 'var(--bad,#e05555)' : warn ? 'var(--warn,#e0a800)' : '';
+        budBar = `<div style="margin-top:.3rem;max-width:230px">` +
+          `<div class="bar-track" style="height:6px"><div class="bar-fill" style="width:${pct}%;${color ? 'background:' + color : ''}"></div></div>` +
+          `<span class="is-size-7 ${warn ? 'has-text-warning-dark' : 'has-text-grey'}" style="display:inline-block;margin-top:.1rem">${warn ? '⚠ ' : ''}${pct}% · ${esc(parts.join(' + '))} /${bp}</span></div>`;
+      }
+      const limText = limits.length ? esc(limits.join('，')) : '';
       const tps = k.avg_tps ? k.avg_tps.toFixed(1) + ' tok/s' : '';
       const tpsCell = tps
         ? `<span title="近 7 天成功请求 ${fmtInt(k.recent_requests)} 次的加权平均">${esc(tps)}</span>`
@@ -169,12 +205,13 @@ async function load() {
       <td data-label="名称"><b>${esc(k.name)}</b></td>
       <td data-label="密钥" class="mono cell-col" data-keycell="${k.id}" data-shown="0">${esc(k.key)}</td>
       <td data-label="模型限制" class="cell-col">${lim}</td>
-      <td data-label="限额" class="cell-col">${limits.length ? esc(limits.join('，')) : '<span class="has-text-grey">不限</span>'}</td>
+      <td data-label="限额" class="cell-col">${(limText ? limText : '')}${budBar || (limText ? '' : '<span class="has-text-grey">不限</span>')}</td>
       <td data-label="输出速度" class="mono">${tpsCell}</td>
       <td data-label="创建时间" class="mono">${fmtTs(k.created_at)}</td>
       <td data-label="操作" class="cell-col">
         <button class="button is-small" onclick="toggleKey(${k.id})">显示</button>
         <button class="button is-small" onclick="copyKey(${k.id})">复制</button>
+        <button class="button is-small" onclick="openTrend(${k.id}, '${esc(k.name)}')">趋势</button>
         <button class="button is-small" onclick="openEditKey(${k.id})">编辑</button>
         <button class="button is-small is-danger is-light" onclick="delKey(${k.id}, '${esc(k.name)}')">删除</button>
       </td>
@@ -227,6 +264,42 @@ window.toggleKey = async function (id) {
 window.copyKey = async function (id) {
   copyText(await revealKey(id));
 };
+
+// ---- 用量趋势（近 7/30 天按 UTC 日聚合） ----
+let trendKeyId = null, trendKeyName = '', trendDays = 7;
+window.openTrend = async function (id, name, days) {
+  trendKeyId = id;
+  if (name !== undefined) trendKeyName = name;
+  if (days) trendDays = days;
+  document.getElementById('trendTitle').textContent = `用量趋势 · ${trendKeyName}`;
+  document.getElementById('trend7').className = 'button is-small' + (trendDays === 7 ? ' is-link' : '');
+  document.getElementById('trend30').className = 'button is-small' + (trendDays === 30 ? ' is-link' : '');
+  document.getElementById('trendModal').classList.add('is-active');
+  const box = document.getElementById('trendBars');
+  try {
+    const r = await api(`/api/admin/keys/${trendKeyId}/usage?days=${trendDays}`);
+    const byDay = Object.fromEntries((r.items || []).map(x => [x.day, x]));
+    // 补全缺失日期为 0，一眼看出哪些天没在用
+    const rows = [];
+    const today = new Date();
+    for (let i = trendDays - 1; i >= 0; i--) {
+      const d = new Date(today.getTime() - i * 86400000).toISOString().slice(0, 10);
+      rows.push(byDay[d] || { day: d, requests: 0, tokens: 0, cost: 0 });
+    }
+    const max = Math.max(1, ...rows.map(x => x.requests));
+    box.innerHTML = rows.map(x => {
+      const w = Math.round(100 * x.requests / max);
+      return `<div class="bar-row"><span class="bar-day">${esc(x.day.slice(5))}</span>` +
+        `<div class="bar-track"><div class="bar-fill" style="width:${w}%"></div></div>` +
+        `<span class="bar-val" style="width:9.5rem">${fmtInt(x.requests)} 次 · ${fmtTok(x.tokens)} tok</span></div>`;
+    }).join('');
+  } catch (ex) { box.innerHTML = `<p class="has-text-danger is-size-7">加载失败：${esc(ex.message)}</p>`; }
+};
+function closeTrend() { document.getElementById('trendModal').classList.remove('is-active'); }
+document.getElementById('tClose').addEventListener('click', closeTrend);
+document.querySelector('#trendModal .modal-background').addEventListener('click', closeTrend);
+document.getElementById('trend7').addEventListener('click', () => openTrend(trendKeyId, undefined, 7));
+document.getElementById('trend30').addEventListener('click', () => openTrend(trendKeyId, undefined, 30));
 
 // ---- 编辑密钥 ----
 let keysCache = [];

@@ -176,6 +176,18 @@ func (a *keyAdmission) record(ak *store.APIKey, prompt, completion int64, cost f
 	}
 }
 
+// budgetUsage 返回密钥当前预算窗口的已用金额与 token 数——与拦截判定同口径
+// （内存累计 + 启动时从日志回填），供管理台画预算消耗进度条。未配预算返回 0。
+func (a *keyAdmission) budgetUsage(ak *store.APIKey) (float64, int64) {
+	if ak.BudgetUSD == 0 && ak.BudgetTokens == 0 {
+		return 0, 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	w := a.budgetWindow(ak)
+	return w.cost, w.tokens
+}
+
 func pruneTimes(q []time.Time, now time.Time, win time.Duration) []time.Time {
 	out := q[:0]
 	for _, t := range q {

@@ -39,11 +39,13 @@ func main() {
 
 	var secret []byte
 	if cfg.Secret != "" {
-		if b, err := hex.DecodeString(cfg.Secret); err == nil && len(b) == 32 {
-			secret = b
-		} else {
-			log.Print("警告：LITEGATE_SECRET 不是 64 位十六进制，已忽略，改用数据库内生成的主密钥")
+		b, err := hex.DecodeString(cfg.Secret)
+		// 配了但不合法是运维失误：静默回退会换一把主密钥导致旧密文全部解不开，
+		// 必须拒绝启动把问题暴露在部署时。未配置则由 store 自动生成并落库。
+		if err != nil || len(b) != 32 {
+			log.Fatal("启动失败：LITEGATE_SECRET 已设置但不是 64 位十六进制（32 字节），拒绝以错误的主密钥启动")
 		}
+		secret = b
 	}
 
 	st, err := store.Open(cfg.DBPath, secret)
@@ -55,11 +57,12 @@ func main() {
 	if n, err := st.CountAPIKeys(); err == nil && n == 0 {
 		k := &store.APIKey{Name: "default"}
 		if err := st.CreateAPIKey(k); err == nil {
-			log.Printf("已生成默认虚拟密钥 %s （下游客户端用它在网关鉴权）", k.Key)
+			log.Printf("已生成默认虚拟密钥 %s （仅此一次显示，请立即记入 deploy/litegate.env 的 LITEGATE_API_KEY；"+
+				"下游客户端用它在网关鉴权，日志不会再次输出）", k.Key)
 		}
 	}
 
-	handler := api.NewServer(st, cfg.AdminPassword, web.Handler())
+	handler := api.NewServer(st, cfg.AdminPassword, web.Handler(), cfg.PanelHosts)
 	api.StartKeyHealthChecker(st, 2*time.Minute)
 
 	// 日志保留策略：启动时清一次，之后每 6 小时清一次；0 天（默认）= 永久保留

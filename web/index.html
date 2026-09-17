@@ -14,6 +14,26 @@
   <h1 class="title is-4" style="margin:0">仪表盘</h1>
   <p class="is-size-7 has-text-grey" style="margin:.3rem 0 1rem">今日与近 7 天用量 · 每 10 秒自动刷新</p>
 
+  <!-- 快速开始：渠道与密钥都为空时显示，有数据自动隐藏 -->
+  <div class="card" id="quickStart" style="display:none;margin-bottom:1.2rem">
+    <div class="card-content">
+      <h2 class="title is-5">快速开始</h2>
+      <p class="is-size-7 has-text-grey" style="margin-bottom:.6rem">三步接入：建渠道 → 签发密钥 → 发第一条消息</p>
+      <ol class="is-size-7" style="line-height:2.1;padding-left:1.2rem">
+        <li><a href="/channels.html">创建上游渠道</a> —— 填 API 地址与上游真实密钥，勾选要启用的模型</li>
+        <li><a href="/keys.html">签发虚拟密钥</a> —— 下游客户端持虚拟密钥调用，可配模型白名单 / 限速 / 预算</li>
+        <li><a href="/playground.html">对话测试</a> —— 选一个模型发第一条消息，验证整条链路</li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- 预算预警：有密钥当前窗口用量达到预算 80% 时显示 -->
+  <div class="card" id="budgetWarn" style="display:none;margin-bottom:1.2rem;border-left:4px solid var(--warn,#e0a800)">
+    <div class="card-content" style="padding:.8rem 1rem">
+      <p class="is-size-7" style="margin:0">⚠ <b>预算预警</b>：<span id="budgetWarnText"></span></p>
+    </div>
+  </div>
+
   <div class="stat-grid">
     <div class="card"><div class="card-content has-text-centered">
       <p class="heading">今日请求</p>
@@ -124,6 +144,25 @@ async function load() {
     document.getElementById('vCost').textContent = fmtCost(d.today_cost_by_currency || d.today_cost_usd);
     document.getElementById('vCh').textContent = `${d.channels_enabled}/${d.channels}`;
     document.getElementById('vKey').textContent = `密钥 ${d.keys} 个`;
+
+    // 快速开始：渠道与密钥均为 0 时显示引导
+    document.getElementById('quickStart').style.display = (!d.channels && !d.keys) ? '' : 'none';
+
+    // 预算预警条：任一密钥当前预算窗口用量 ≥ 80%
+    try {
+      const ks = await api('/api/admin/keys');
+      const ratio = k => Math.max(
+        k.budget_usd ? (k.budget_used_usd || 0) / k.budget_usd : 0,
+        k.budget_tokens ? (k.budget_used_tokens || 0) / k.budget_tokens : 0);
+      const warns = (ks || []).filter(k => ratio(k) >= 0.8);
+      const strip = document.getElementById('budgetWarn');
+      strip.style.display = warns.length ? '' : 'none';
+      if (warns.length) {
+        document.getElementById('budgetWarnText').textContent = warns
+          .map(k => `${k.name} 已用 ${Math.min(100, Math.round(ratio(k) * 100))}%（${k.budget_period === 'monthly' ? '月' : '日'}预算）`)
+          .join('，') + '，超限后该密钥将返回 429';
+      }
+    } catch (_) { /* 密钥列表拉取失败不阻塞仪表盘 */ }
 
     // 近 7 天条形图（按请求数）
     const days = d.daily || [];

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type RequestLog struct {
@@ -45,12 +46,14 @@ func (s *Store) InsertRequestLog(l *RequestLog) error {
 // LogFilter 是请求日志的查询条件；零值表示不过滤。
 type LogFilter struct {
 	Limit, Offset int
-	ChannelID     int64
-	APIKeyID      int64
-	Model         string
-	App           string
-	Status        string // ""=全部，"ok"=成功，"error"=失败
-	Since, Until  string // "YYYY-MM-DD HH:MM:SS"，与 ts（UTC 文本）做字典序比较
+	// ID 精确匹配单条日志（request_id 直达排查）；0 = 不启用。
+	ID           int64
+	ChannelID    int64
+	APIKeyID     int64
+	Model        string
+	App          string
+	Status       string // ""=全部，"ok"=成功，"error"=失败
+	Since, Until string // "YYYY-MM-DD HH:MM:SS"，与 ts（UTC 文本）做字典序比较
 }
 
 // LogPage 的 total 是当前过滤条件下的总条数，供分页展示。
@@ -74,7 +77,7 @@ func (s *Store) ListLogs(f LogFilter) (*LogPage, error) {
 	rows, err := s.DB.Query(
 		`SELECT id, ts, api_key_id, channel_id, model, protocol, app, status,
 		        latency_ms, ttfb_ms, prompt_tokens, completion_tokens, cache_tokens, cost, error
-		 FROM request_logs` + where + ` ORDER BY id DESC LIMIT ? OFFSET ?`,
+		 FROM request_logs`+where+` ORDER BY id DESC LIMIT ? OFFSET ?`,
 		append(args, f.Limit, f.Offset)...)
 	if err != nil {
 		return nil, err
@@ -95,6 +98,10 @@ func (s *Store) ListLogs(f LogFilter) (*LogPage, error) {
 func (f LogFilter) where() (string, []any) {
 	var conds []string
 	var args []any
+	if f.ID > 0 {
+		conds = append(conds, "id = ?")
+		args = append(args, f.ID)
+	}
 	if f.ChannelID > 0 {
 		conds = append(conds, "channel_id = ?")
 		args = append(args, f.ChannelID)
@@ -170,6 +177,42 @@ func (s *Store) LogSummaries(f LogFilter) ([]LogSummary, error) {
 			return nil, err
 		}
 		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// KeyDailyUsageRow 是某密钥单天的用量聚合（趋势图用）。
+type KeyDailyUsageRow struct {
+	Day      string  `json:"day"` // UTC "2026-09-17"
+	Requests int64   `json:"requests"`
+	Errors   int64   `json:"errors"`
+	Tokens   int64   `json:"tokens"` // 输入 + 输出
+	Cost     float64 `json:"cost"`
+}
+
+// KeyDailyUsage 按天聚合某密钥近 days 天的用量（UTC 日对齐，与日志 ts 口径一致）。
+func (s *Store) KeyDailyUsage(keyID int64, days int) ([]KeyDailyUsageRow, error) {
+	if days <= 0 || days > 90 {
+		days = 7
+	}
+	since := time.Now().UTC().AddDate(0, 0, -days+1).Format("2006-01-02") + " 00:00:00"
+	rows, err := s.DB.Query(
+		`SELECT substr(ts,1,10) AS day, COUNT(*), IFNULL(SUM(status >= 400 OR error != ''), 0),
+		        IFNULL(SUM(prompt_tokens + completion_tokens), 0), IFNULL(ROUND(SUM(cost), 6), 0)
+		 FROM request_logs
+		 WHERE api_key_id = ? AND ts >= ?
+		 GROUP BY day ORDER BY day`, keyID, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []KeyDailyUsageRow{}
+	for rows.Next() {
+		var r KeyDailyUsageRow
+		if err := rows.Scan(&r.Day, &r.Requests, &r.Errors, &r.Tokens, &r.Cost); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }

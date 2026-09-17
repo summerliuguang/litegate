@@ -40,8 +40,14 @@ LITEGATE_ADMIN_PASSWORD=你的管理密码 ./litegate -addr :8080 -db /var/lib/l
 |---|---|---|
 | `-addr` | 监听地址 | `:8080` |
 | `-db` | SQLite 文件路径 | `./litegate.db` |
-| `LITEGATE_ADMIN_PASSWORD` | 管理密码（必设） | `admin`（仅测试用） |
-| `LITEGATE_SECRET` | 32 字节十六进制主密钥，用于加密渠道凭证；不设则首次启动自动生成并存库 | 自动生成 |
+| `LITEGATE_ADMIN_PASSWORD` | 管理密码（必设；未设置或仍为 `admin` 时**拒绝启动**） | 无 |
+| `LITEGATE_SECRET` | 32 字节（64 位十六进制）主密钥，用于加密渠道凭证；不设则首次启动自动生成并存库；**设了但格式非法时拒绝启动**（静默回退会导致旧密文解不开） | 自动生成 |
+| `LITEGATE_PANEL_HOSTS` | 面板 Host 白名单（逗号分隔），SSO 回跳地址只从中选取，防止伪造 Host 头开放重定向 | `192.168.5.15:29007,127.0.0.1:8080,localhost:8080` |
+| `LITEGATE_STREAM_IDLE_TIMEOUT` | 上游响应体空闲上限（秒）：连续无字节进展即中断连接，防止上游挂起占死连接；默认关闭，需要时设正数秒启用 | `0`（关闭） |
+| `LITEGATE_LOG_RETENTION_DAYS` | 请求日志保留天数，启动与每 6 小时自动清理；0 永久保留 | `0` |
+
+安全响应头（`X-Content-Type-Options` / `X-Frame-Options: DENY` / `Referrer-Policy` / `CSP`）
+对所有响应统一注入；管理令牌签发与 SSO 换票同权，登录接口带 IP 级失败锁定（5 次锁 60 秒）。
 
 生产环境建议用 systemd 托管（`Restart=always`）。
 
@@ -114,14 +120,17 @@ GET    /api/admin/channels/{id}/discover 拉取上游 /models 模型列表（回
 POST   /api/admin/channels/{id}/keys/{key_id}/enable|disable   手动启停单把渠道密钥
 POST   /api/admin/db/backup             在线备份（VACUUM INTO，存数据库同级 backups/）
 GET    /api/admin/db/backups            备份文件列表
-GET    /api/admin/config/export         导出渠道+价格 JSON（include_keys=1 才含明文密钥）
+GET    /api/admin/config/export         导出渠道+价格 JSON（include_keys=1 才含明文密钥，
+                                        且需请求头 X-Admin-Password 携带管理密码二次确认；
+                                        export/import/backup/reveal 均记审计日志）
 POST   /api/admin/config/import         导入（渠道按 name upsert，未给密钥沿用原值）
 GET    /api/admin/keys                  虚拟密钥列表（含近 7 天平均输出速度 avg_tps）
 POST   /api/admin/keys                  签发密钥 {name, allowed_models, rpm_limit, tpm_limit,
                                         budget_usd, budget_period, budget_tokens, expires_at}
 PUT    /api/admin/keys/{id}             更新（同上字段全量替换）
+GET    /api/admin/keys/{id}/usage?days=7|30  按天聚合的密钥用量（趋势图）
 DELETE /api/admin/keys/{id}
-GET    /api/admin/logs?limit=100        请求日志（支持 limit/offset/channel_id/api_key_id/
+GET    /api/admin/logs?limit=100        请求日志（支持 limit/offset/id/channel_id/api_key_id/
                                         model/status=ok|error/since/until 过滤分页，返回 {items,total}）
 GET    /api/admin/prices                模型价格列表
 PUT    /api/admin/prices                设置价格 {model, input_price, output_price, cache_read_price?, currency:"USD"|"CNY"}

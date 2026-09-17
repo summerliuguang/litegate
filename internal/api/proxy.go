@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -11,7 +12,9 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"os"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,15 +25,18 @@ import (
 const maxBodyBytes = 32 << 20
 
 type proxy struct {
-	st      *store.Store
-	client  *http.Client
-	cache   modelsCache
-	pc      priceCache
-	keys    *keyHealthManager
-	limits  *keyAdmission
-	alerts  *alertManager
-	metrics *metricsState
-	bcfg    bodyLogCfgCache
+	st     *store.Store
+	client *http.Client
+	// idleTimeout 是上游响应体的空闲上限：连续该时长没有任何字节进展就中断
+	// 连接（LLM 流式可能长时间无新数据，但不该永久挂起）。0 = 关闭。
+	idleTimeout time.Duration
+	cache       modelsCache
+	pc          priceCache
+	keys        *keyHealthManager
+	limits      *keyAdmission
+	alerts      *alertManager
+	metrics     *metricsState
+	bcfg        bodyLogCfgCache
 	// auto 路由状态：模型延迟统计缓存与各密钥的轮转计数器（balance 模式）
 	lat modelLatencyCache
 	rr  sync.Map // api_key_id -> *atomic.Uint64
@@ -124,7 +130,7 @@ func (p *proxy) serveAudioSpeech(w http.ResponseWriter, r *http.Request) {
 		"audio":    audio,
 	})
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternalError(w, r, err)
 		return
 	}
 	p.serveBody(w, r, "openai", "/chat/completions", "audio", in.Model, chatBody, decodeChatAudio)
@@ -211,7 +217,7 @@ func (p *proxy) serveAudioTranscriptions(w http.ResponseWriter, r *http.Request)
 		}},
 	})
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternalError(w, r, err)
 		return
 	}
 	p.serveBody(w, r, "openai", "/chat/completions", "audio", model, chatBody, func(resp *http.Response) (*http.Response, error) {
@@ -286,7 +292,7 @@ func (p *proxy) serveBody(w http.ResponseWriter, r *http.Request, protocol, upst
 	}
 	chans, err := p.st.ListChannels(protocol)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeInternalError(w, r, err)
 		return
 	}
 	// 密钥级模型别名：客户端硬编码的外部名（如 gpt-4o）映射到实际模型；
@@ -656,12 +662,69 @@ func (p *proxy) attemptUpstream(r *http.Request, c *store.Channel, key, path str
 		// 客户端查询串原样透传（如 Azure 的 api-version、beta 开关）
 		upstream += "?" + r.URL.RawQuery
 	}
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstream, bytes.NewReader(body))
+	// 看门狗派生自下游请求 context、挂在上游请求上：cancel 是 transport 正在
+	// 监视的那把，触发时会中断阻塞中的 Body.Read（cancel 子 context 起不到
+	// 这个效果，必须派生后传给 NewRequestWithContext）。
+	reqCtx, cancel := context.WithCancel(r.Context())
+	req, err := http.NewRequestWithContext(reqCtx, r.Method, upstream, bytes.NewReader(body))
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 	setUpstreamHeaders(req, r, c, key)
-	return p.client.Do(req)
+	resp, err := p.client.Do(req)
+	if err != nil || resp == nil || resp.Body == nil {
+		cancel()
+		return resp, err
+	}
+	// cancel 交给 Body 的 Close 统一释放（幂等）；启用看门狗时再挂空闲计时器。
+	var timer *time.Timer
+	if p.idleTimeout > 0 {
+		timer = time.AfterFunc(p.idleTimeout, cancel)
+	}
+	resp.Body = &watchdogBody{ReadCloser: resp.Body, timer: timer, cancel: cancel, idle: p.idleTimeout}
+	return resp, nil
+}
+
+// upstreamIdleTimeout 读 LITEGATE_STREAM_IDLE_TIMEOUT（单位秒）；默认 0 =
+// 关闭看门狗（上游挂起时依赖下游客户端断开来传播中断）。需要防挂起的部署
+// 显式设正数秒启用。
+func upstreamIdleTimeout() time.Duration {
+	if s := os.Getenv("LITEGATE_STREAM_IDLE_TIMEOUT"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 0
+}
+
+// watchdogBody 每次读到字节就重置空闲计时器；连续 idle 无进展（上游挂起/
+// 网络黑洞）时 cancel 请求上下文中断连接，避免 Read 永久阻塞占住连接与
+// goroutine。默认关闭（idle=0 时 timer 为 nil），仅显式配置后生效。
+type watchdogBody struct {
+	io.ReadCloser
+	timer  *time.Timer
+	cancel context.CancelFunc
+	idle   time.Duration
+}
+
+func (b *watchdogBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 && b.timer != nil {
+		b.timer.Reset(b.idle)
+	}
+	if err != nil && b.timer != nil {
+		b.timer.Stop()
+	}
+	return n, err
+}
+
+func (b *watchdogBody) Close() error {
+	if b.timer != nil {
+		b.timer.Stop()
+	}
+	b.cancel() // 释放派生 context 的资源（幂等）
+	return b.ReadCloser.Close()
 }
 
 // respond 把上游响应回写给客户端；进入此函数后不再故障转移。

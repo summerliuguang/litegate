@@ -71,6 +71,15 @@ func (m *metricsState) observeAuto(mode string) {
 	m.mu.Unlock()
 }
 
+// promEscape 按 Prometheus 文本格式规范转义标签值：规范只定义反斜杠、双引号、
+// 换行三种转义（model 等标签来自客户端可控的模型名，不能靠 %q 的 Go 转义集）。
+func promEscape(s string) string {
+	if !strings.ContainsAny(s, `"\\`+"\n") {
+		return s
+	}
+	return strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`).Replace(s)
+}
+
 // serveMetrics 输出 Prometheus text 格式。访问控制在 server.go 的包装 handler：
 // 本机直连放行，经 nginx 等反代（带 X-Real-IP/X-Forwarded-For）要求管理令牌。
 func (p *proxy) serveMetrics(w http.ResponseWriter, _ *http.Request) {
@@ -94,11 +103,16 @@ func (p *proxy) serveMetrics(w http.ResponseWriter, _ *http.Request) {
 		}
 		return keys[i].code < keys[j].code
 	})
+	// latency 家族（_sum/_count）的 TYPE 声明必须先于首个样本
+	wr("# HELP litegate_request_latency_seconds Cumulative request latency (sum) and request count, by model/protocol/status.\n" +
+		"# TYPE litegate_request_latency_seconds counter\n")
 	for _, k := range keys {
 		wr(fmt.Sprintf("litegate_requests_total{model=%q,protocol=%q,code=%q} %d\n",
-			k.model, k.protocol, k.code, p.metrics.requests[k]))
+			promEscape(k.model), promEscape(k.protocol), k.code, p.metrics.requests[k]))
 		wr(fmt.Sprintf("litegate_request_latency_seconds_sum{model=%q,protocol=%q,code=%q} %.3f\n",
-			k.model, k.protocol, k.code, float64(p.metrics.latencySumMs[k])/1000))
+			promEscape(k.model), promEscape(k.protocol), k.code, float64(p.metrics.latencySumMs[k])/1000))
+		wr(fmt.Sprintf("litegate_request_latency_seconds_count{model=%q,protocol=%q,code=%q} %d\n",
+			promEscape(k.model), promEscape(k.protocol), k.code, p.metrics.requests[k]))
 	}
 	wr("# HELP litegate_requests_total_all Total requests across all models.\n# TYPE litegate_requests_total_all counter\n")
 	wr(fmt.Sprintf("litegate_requests_total_all %d\n", total))
@@ -120,10 +134,10 @@ func (p *proxy) serveMetrics(w http.ResponseWriter, _ *http.Request) {
 
 	wr("# HELP litegate_tokens_total Tokens by kind and model.\n# TYPE litegate_tokens_total counter\n")
 	for _, m := range names {
-		wr(fmt.Sprintf("litegate_tokens_total{model=%q,kind=%q} %d\n", m, "prompt", p.metrics.tokPrompt[m]))
-		wr(fmt.Sprintf("litegate_tokens_total{model=%q,kind=%q} %d\n", m, "completion", p.metrics.tokCompletion[m]))
+		wr(fmt.Sprintf("litegate_tokens_total{model=%q,kind=%q} %d\n", promEscape(m), "prompt", p.metrics.tokPrompt[m]))
+		wr(fmt.Sprintf("litegate_tokens_total{model=%q,kind=%q} %d\n", promEscape(m), "completion", p.metrics.tokCompletion[m]))
 		if c := p.metrics.tokCache[m]; c > 0 {
-			wr(fmt.Sprintf("litegate_tokens_total{model=%q,kind=%q} %d\n", m, "cache_read", c))
+			wr(fmt.Sprintf("litegate_tokens_total{model=%q,kind=%q} %d\n", promEscape(m), "cache_read", c))
 		}
 	}
 
@@ -144,7 +158,7 @@ func (p *proxy) serveMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	sort.Strings(modes)
 	for _, m := range modes {
-		wr(fmt.Sprintf("litegate_auto_route_total{mode=%q} %d\n", m, p.metrics.autoByMode[m]))
+		wr(fmt.Sprintf("litegate_auto_route_total{mode=%q} %d\n", promEscape(m), p.metrics.autoByMode[m]))
 	}
 	p.metrics.mu.Unlock()
 
