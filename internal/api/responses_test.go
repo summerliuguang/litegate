@@ -122,15 +122,15 @@ func TestResponsesEndToEndNonStream(t *testing.T) {
 	}
 
 	var out struct {
-		ID      string `json:"id"`
-		Object  string `json:"object"`
-		Status  string `json:"status"`
-		Model   string `json:"model"`
-		Output  []map[string]any `json:"output"`
-		Usage   struct {
-			InputTokens  int64 `json:"input_tokens"`
-			OutputTokens int64 `json:"output_tokens"`
-			TotalTokens  int64 `json:"total_tokens"`
+		ID     string           `json:"id"`
+		Object string           `json:"object"`
+		Status string           `json:"status"`
+		Model  string           `json:"model"`
+		Output []map[string]any `json:"output"`
+		Usage  struct {
+			InputTokens        int64 `json:"input_tokens"`
+			OutputTokens       int64 `json:"output_tokens"`
+			TotalTokens        int64 `json:"total_tokens"`
 			InputTokensDetails struct {
 				CachedTokens int64 `json:"cached_tokens"`
 			} `json:"input_tokens_details"`

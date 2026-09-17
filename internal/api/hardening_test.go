@@ -315,7 +315,7 @@ func TestBudgetCurrencyNorm(t *testing.T) {
 	a.load(st)
 
 	a.record(ak, 0, 0, 0, 3.6) // ¥3.6 → 默认汇率 7.2 → $0.5
-	if status, _ := a.admit(ak); status != 0 {
+	if status, _, _ := a.admit(ak); status != 0 {
 		t.Fatalf("should allow under budget, got %d", status)
 	}
 	usd, cny, tok := a.budgetUsage(ak)
@@ -323,7 +323,7 @@ func TestBudgetCurrencyNorm(t *testing.T) {
 		t.Fatalf("budgetUsage = %v/%v/%v, want 0.5/3.6/0", usd, cny, tok)
 	}
 	a.record(ak, 0, 0, 0.5, 0) // 累计 $1.0 等值 → 达到预算
-	if status, msg := a.admit(ak); status != 429 {
+	if status, _, msg := a.admit(ak); status != 429 {
 		t.Fatalf("should block at $1 equivalent, got %d (%s)", status, msg)
 	}
 	// 汇率改 3.6 后，同样一笔 ¥3.6 折 $1.0 → 单笔即达预算被拦（旧口径要 7 倍消费才拦）
@@ -337,13 +337,13 @@ func TestBudgetCurrencyNorm(t *testing.T) {
 	a3 := newKeyAdmission(nil)
 	a3.load(st) // load 注入 st（汇率读 settings）；账本为空 → 窗口从零开始
 	a3.record(ak, 0, 0, 0, 3.6)
-	if status, _ := a3.admit(ak); status != 429 {
+	if status, _, _ := a3.admit(ak); status != 429 {
 		t.Fatalf("¥3.6 at rate 3.6 should reach $1 budget, got %d", status)
 	}
 	// 重启回填路径：新实例从账本重建窗口（本测试未落账本 → 0，应放行）
 	a2 := newKeyAdmission(nil)
 	a2.load(st)
-	if status, _ := a2.admit(ak); status != 0 {
+	if status, _, _ := a2.admit(ak); status != 0 {
 		t.Fatalf("fresh instance with empty ledger should allow, got %d", status)
 	}
 }
@@ -439,6 +439,115 @@ func TestKeyCooldownPersistence(t *testing.T) {
 	}
 	if n := m2.coolingCount(); n != 0 {
 		t.Fatalf("cooling after success = %d, want 0", n)
+	}
+}
+
+// TestErrorCodes 数据面错误响应带机器可读 code 字段，客户端无需解析文案。
+func TestErrorCodes(t *testing.T) {
+	srv, st := newTestServer(t)
+	plain := mustCreateKey(t, st)
+	bound := &store.APIKey{Name: "lim", AllowedModels: []string{"x"}}
+	if err := st.CreateAPIKey(bound); err != nil {
+		t.Fatal(err)
+	}
+	expired := &store.APIKey{Name: "old", ExpiresAt: "2020-01-01"}
+	if err := st.CreateAPIKey(expired); err != nil {
+		t.Fatal(err)
+	}
+
+	getCode := func(key, body string) string {
+		t.Helper()
+		rec := do(srv, "POST", "/v1/chat/completions", body,
+			map[string]string{"Authorization": "Bearer " + key})
+		var out struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode %d: %v %s", rec.Code, err, rec.Body.String())
+		}
+		return out.Code
+	}
+
+	// 无渠道服务模型 → no_channel
+	if c := getCode(plain, `{"model":"m","messages":[]}`); c != "no_channel" {
+		t.Fatalf("no_channel expected, got %q", c)
+	}
+	// 渠道存在但白名单不含该模型 → model_not_allowed
+	mustCreateChannel(t, st, "openai", "http://127.0.0.1:1/v1", []string{"m"}, 0)
+	if c := getCode(bound.Key, `{"model":"m","messages":[]}`); c != "model_not_allowed" {
+		t.Fatalf("model_not_allowed expected, got %q", c)
+	}
+	// 过期密钥 → key_expired
+	if c := getCode(expired.Key, `{"model":"m","messages":[]}`); c != "key_expired" {
+		t.Fatalf("key_expired expected, got %q", c)
+	}
+	// 无效密钥 → invalid_key
+	if c := getCode("sk-lg-invalid", `{"model":"m","messages":[]}`); c != "invalid_key" {
+		t.Fatalf("invalid_key expected, got %q", c)
+	}
+}
+
+// TestReadonlyToken 只读令牌：读端点放行、写与敏感读一律 401，签发记审计。
+func TestReadonlyToken(t *testing.T) {
+	srv, st := newTestServer(t)
+	full := adminToken(t, srv)
+	rec := do(srv, "POST", "/api/admin/readonly-token", "",
+		map[string]string{"Authorization": "Bearer " + full})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mint = %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || out.Token == "" {
+		t.Fatal("no ro token in response")
+	}
+	ro := map[string]string{"Authorization": "Bearer " + out.Token}
+
+	// 读端点放行
+	if rec := do(srv, "GET", "/api/admin/dashboard", "", ro); rec.Code != http.StatusOK {
+		t.Fatalf("ro dashboard = %d", rec.Code)
+	}
+	if rec := do(srv, "GET", "/api/admin/keys", "", ro); rec.Code != http.StatusOK {
+		t.Fatalf("ro keys = %d", rec.Code)
+	}
+	if rec := do(srv, "GET", "/api/admin/logs", "", ro); rec.Code != http.StatusOK {
+		t.Fatalf("ro logs = %d", rec.Code)
+	}
+
+	// 写操作拒绝
+	if rec := do(srv, "POST", "/api/admin/keys", `{"name":"x"}`, ro); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("ro write = %d, want 401", rec.Code)
+	}
+	// 敏感读拒绝：明文 reveal / 配置导出
+	if rec := do(srv, "GET", "/api/admin/keys/1/reveal", "", ro); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("ro reveal = %d, want 401", rec.Code)
+	}
+	if rec := do(srv, "GET", "/api/admin/config/export", "", ro); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("ro export = %d, want 401", rec.Code)
+	}
+	// 登录接口的 readonly 变体同样受限
+	rec = do(srv, "POST", "/api/admin/login", `{"password":"testpw","readonly":true}`, nil)
+	var roLogin struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &roLogin); err != nil || roLogin.Token == "" {
+		t.Fatal("readonly login failed")
+	}
+	if rec := do(srv, "PUT", "/api/admin/prices", `{"model":"m","input_price":1}`,
+		map[string]string{"Authorization": "Bearer " + roLogin.Token}); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("ro-login write = %d, want 401", rec.Code)
+	}
+	// 签发入审计
+	auditOK := false
+	rows, _ := st.ListAudit(50)
+	for _, a := range rows {
+		if a.Action == "readonly_token.create" {
+			auditOK = true
+		}
+	}
+	if !auditOK {
+		t.Fatal("readonly token mint not audited")
 	}
 }
 

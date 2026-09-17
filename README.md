@@ -10,6 +10,9 @@
 - 虚拟密钥治理：模型白名单（下拉勾选式配置）、RPM/TPM 限速、日/月预算（美元或 token，超限 429）、过期时间。
   预算账本按密钥×日独立累计（key_usage_day，不随日志保留期清理，月预算跨重启不漏账）；
   ¥ 计价模型的成本按 `usd_cny_rate`（默认 7.2，管理 API 可改）折算成美元等值后与 budget_usd 比较
+- 数据面错误响应带机器可读 `code` 字段：`invalid_key` / `key_expired` / `rate_limited_rpm` /
+  `rate_limited_tpm` / `rate_limited_concurrency` / `budget_exhausted` / `model_not_allowed` /
+  `no_channel` / `internal`，客户端按 code 分支而非解析文案
 - 管理台对话测试：playground 页选启用模型直接对话（流式输出、思维链折叠展示、用量元信息），进程内复用数据面链路，日志按 `X-LiteGate-App: playground` 归因
 - 用量统计：请求级 Token 计量（含 prompt caching 缓存 token，读按 1/10 价计费）、成本核算（模型价格可配）、按虚拟密钥的输出速度统计（近 7 天加权平均 + 日志逐条 tok/s）、日志过滤分页、用量看板（今日/近 7 天/按渠道/按模型/按应用）
 - 内嵌管理页面与管理 API：渠道 CRUD、连通性测试、虚拟密钥、请求日志、用量看板；管理页适配手机端（表格自动转卡片式布局，统计卡两列）
@@ -138,6 +141,8 @@ POST   /api/admin/keys                  签发密钥 {name, allowed_models, rpm_
                                         budget_usd, budget_period, budget_tokens, expires_at}
 PUT    /api/admin/keys/{id}             更新（同上字段全量替换）
 GET    /api/admin/keys/{id}/usage?days=7|30  按天聚合的密钥用量（趋势图，读 key_usage_day 账本）
+POST   /api/admin/readonly-token        签发只读管理令牌（全权会话鉴权；仅放行读端点，
+                                        不能变更/取明文/导出配置；30 天有效，重启失效）
 GET    /api/admin/budget               预算归一汇率 {usd_cny_rate}（默认 7.2）
 PUT    /api/admin/budget               更新汇率（只影响预算拦截口径，改后即时生效并记审计）
 DELETE /api/admin/keys/{id}

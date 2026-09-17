@@ -26,7 +26,7 @@ func NewServer(st *store.Store, adminPassword string, webHandler http.Handler, p
 		st:         st,
 		password:   adminPassword,
 		panelHosts: normalizePanelHosts(panelHosts),
-		sessions:   map[string]time.Time{},
+		sessions:   map[string]adminSession{},
 		failures:   map[string]int{},
 		locked:     map[string]time.Time{},
 	}
@@ -158,7 +158,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // 探测内部拓扑。管理面错误仍直出 err.Error()，便于运维定位。
 func writeInternalError(w http.ResponseWriter, r *http.Request, err error) {
 	log.Printf("%s %s: internal error: %v", r.Method, r.URL.Path, err)
-	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal gateway error"})
+	writeErr(w, http.StatusInternalServerError, "internal", "internal gateway error")
+}
+
+// writeErr 输出带机器可读错误码的 API 错误响应：客户端按 code 分支（如区分
+// rpm 限速与预算耗尽），error 文案仅供人读、可随时调整。
+func writeErr(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg, "code": code})
 }
 
 // readJSON 解析请求体 JSON；超出限制或格式错误时直接写 400 并返回 error。

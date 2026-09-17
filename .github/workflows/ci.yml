@@ -1,0 +1,23 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt（列出未格式化文件即失败）
+        run: test -z "$(gofmt -l internal cmd)" || { gofmt -l internal cmd; exit 1; }
+      - name: go vet
+        run: go vet ./...
+      - name: go test -race
+        run: go test -race ./... -count=1
+      - name: build（ldflags 注入版本号，与本地构建同构）
+        run: go build -trimpath -ldflags="-s -w -X litegate/internal/api.Version=ci" ./cmd/litegate

@@ -35,63 +35,75 @@ type admin struct {
 	alerts         *alertManager
 
 	mu       sync.Mutex
-	sessions map[string]time.Time
+	sessions map[string]adminSession
 	failures map[string]int       // 来源 IP → 连续登录失败次数
 	locked   map[string]time.Time // 来源 IP → 锁定截止时间
 }
 
+// adminSession 是一次管理会话：ro 标记只读令牌（仪表盘抓取/外部监控用，
+// 仅放行显式列入白名单的读端点），与全权令牌同源签发、重启同灭。
+type adminSession struct {
+	exp time.Time
+	ro  bool
+}
+
 func (a *admin) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/login", a.login)
+	// 只读令牌（监控/仪表盘抓取）：仅放行下方标 authRO 的读端点
+	mux.Handle("POST /api/admin/readonly-token", a.auth(a.mintReadonlyToken))
 	// SSO 会话登录：浏览器带统一登录 Cookie 访问面板时,前端调本端点换取面板 token
 	mux.HandleFunc("GET /api/admin/sso-login", a.ssoLogin)
 	// 跳统一登录页(登录后回面板根路径)
 	mux.HandleFunc("GET /api/admin/sso-redirect", a.ssoRedirect)
-	mux.Handle("GET /api/admin/dashboard", a.auth(a.dashboard))
-	mux.Handle("GET /api/admin/channels", a.auth(a.listChannels))
+	mux.Handle("GET /api/admin/dashboard", a.authRO(a.dashboard))
+	mux.Handle("GET /api/admin/channels", a.authRO(a.listChannels))
 	mux.Handle("POST /api/admin/channels", a.auth(a.createChannel))
 	mux.Handle("PUT /api/admin/channels/{id}", a.auth(a.updateChannel))
 	mux.Handle("DELETE /api/admin/channels/{id}", a.auth(a.deleteChannel))
 	mux.Handle("POST /api/admin/channels/{id}/test", a.auth(a.testChannel))
 	mux.Handle("POST /api/admin/channels/{id}/balance", a.auth(a.channelBalances))
-	mux.Handle("GET /api/admin/alerts", a.auth(a.getAlerts))
+	mux.Handle("GET /api/admin/alerts", a.authRO(a.getAlerts))
 	mux.Handle("PUT /api/admin/alerts", a.auth(a.putAlerts))
 	mux.Handle("POST /api/admin/alerts/test", a.auth(a.testAlert))
 	mux.Handle("POST /api/admin/channels/{id}/keys/{key_id}/enable", a.auth(a.enableChannelKey))
 	mux.Handle("POST /api/admin/channels/{id}/keys/{key_id}/disable", a.auth(a.disableChannelKey))
 	mux.Handle("POST /api/admin/channels/{id}/models/disable/{model...}", a.auth(a.disableChannelModel))
 	mux.Handle("POST /api/admin/channels/{id}/models/enable/{model...}", a.auth(a.enableChannelModel))
-	mux.Handle("GET /api/admin/audit", a.auth(a.listAudit))
-	mux.Handle("GET /api/admin/audit/export", a.auth(a.exportAudit))
-	mux.Handle("GET /api/admin/audit-config", a.auth(a.getAuditCfg))
+	mux.Handle("GET /api/admin/audit", a.authRO(a.listAudit))
+	mux.Handle("GET /api/admin/audit/export", a.authRO(a.exportAudit))
+	mux.Handle("GET /api/admin/audit-config", a.authRO(a.getAuditCfg))
 	mux.Handle("PUT /api/admin/audit-config", a.auth(a.putAuditCfg))
-	mux.Handle("GET /api/admin/bodylog", a.auth(a.getBodyLog))
+	mux.Handle("GET /api/admin/bodylog", a.authRO(a.getBodyLog))
 	mux.Handle("PUT /api/admin/bodylog", a.auth(a.putBodyLog))
 	mux.Handle("GET /api/admin/bodylog/{id}", a.auth(a.getRequestBody))
 	mux.Handle("POST /api/admin/bodylog/{id}/replay", a.auth(a.replayBody))
-	mux.Handle("GET /api/admin/keys", a.auth(a.listKeys))
+	mux.Handle("GET /api/admin/keys", a.authRO(a.listKeys))
 	mux.Handle("POST /api/admin/keys", a.auth(a.createKey))
 	mux.Handle("PUT /api/admin/keys/{id}", a.auth(a.updateKey))
 	mux.Handle("GET /api/admin/keys/{id}/reveal", a.auth(a.revealKey))
-	mux.Handle("GET /api/admin/keys/{id}/usage", a.auth(a.keyUsage))
-	mux.Handle("GET /api/admin/budget", a.auth(a.getBudget))
+	mux.Handle("GET /api/admin/keys/{id}/usage", a.authRO(a.keyUsage))
+	mux.Handle("GET /api/admin/budget", a.authRO(a.getBudget))
 	mux.Handle("PUT /api/admin/budget", a.auth(a.putBudget))
 	mux.Handle("DELETE /api/admin/keys/{id}", a.auth(a.deleteKey))
 	mux.Handle("GET /api/admin/channels/{id}/discover", a.auth(a.discoverChannelModels))
 	mux.Handle("POST /api/admin/db/backup", a.auth(a.backupDB))
-	mux.Handle("GET /api/admin/db/backups", a.auth(a.listBackups))
+	mux.Handle("GET /api/admin/db/backups", a.authRO(a.listBackups))
 	mux.Handle("GET /api/admin/config/export", a.auth(a.exportConfig))
 	mux.Handle("POST /api/admin/config/import", a.auth(a.importConfig))
-	mux.Handle("GET /api/admin/logs", a.auth(a.listLogs))
-	mux.Handle("GET /api/admin/logs/summary", a.auth(a.listLogSummaries))
-	mux.Handle("GET /api/admin/prices", a.auth(a.listPrices))
+	mux.Handle("GET /api/admin/logs", a.authRO(a.listLogs))
+	mux.Handle("GET /api/admin/logs/summary", a.authRO(a.listLogSummaries))
+	mux.Handle("GET /api/admin/prices", a.authRO(a.listPrices))
 	mux.Handle("PUT /api/admin/prices", a.auth(a.upsertPrice))
 	mux.Handle("DELETE /api/admin/prices/{model...}", a.auth(a.deletePrice))
 	a.registerPlayground(mux)
 }
 
+// auth 全权会话鉴权：写操作与敏感读（明文 reveal/导出）必须走这里，
+// 只读令牌一律 401。
 func (a *admin) auth(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !a.hasSession(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")) {
+		s, ok := a.session(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		if !ok || s.ro {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
@@ -99,15 +111,47 @@ func (a *admin) auth(next http.HandlerFunc) http.Handler {
 	})
 }
 
-// hasSession 报告令牌是否为有效的管理会话（/metrics 反代访问鉴权复用）。
+// hasSession 报告令牌是否为有效的管理会话（/metrics 反代访问鉴权复用，
+// 只读会话同样放行——监控抓指标是其本职场景）。
 func (a *admin) hasSession(tok string) bool {
+	s, ok := a.session(tok)
+	return ok && time.Now().Before(s.exp)
+}
+
+// session 取令牌对应的会话；不存在返回 false。
+func (a *admin) session(tok string) (adminSession, bool) {
 	if tok == "" {
-		return false
+		return adminSession{}, false
 	}
 	a.mu.Lock()
-	exp, ok := a.sessions[tok]
+	s, ok := a.sessions[tok]
 	a.mu.Unlock()
-	return ok && time.Now().Before(exp)
+	return s, ok
+}
+
+// authRO 与 auth 相同，但接受只读会话：仅挂显式允许的读端点。
+func (a *admin) authRO(next http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := a.session(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")); !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		next(w, r)
+	})
+}
+
+// mintSession 签发会话并清理过期项（登录与只读令牌共用）。
+func (a *admin) mintSession(d time.Duration, ro bool) string {
+	tok := cryptoutil.RandomHex(32)
+	a.mu.Lock()
+	a.sessions[tok] = adminSession{exp: time.Now().Add(d), ro: ro}
+	for k, s := range a.sessions { // 顺手清理过期会话
+		if time.Now().After(s.exp) {
+			delete(a.sessions, k)
+		}
+	}
+	a.mu.Unlock()
+	return tok
 }
 
 func (a *admin) login(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +164,7 @@ func (a *admin) login(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		Password string `json:"password"`
+		Readonly bool   `json:"readonly"`
 	}
 	if readJSON(w, r, &req) != nil {
 		return
@@ -129,17 +174,19 @@ func (a *admin) login(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "wrong password"})
 		return
 	}
-	tok := cryptoutil.RandomHex(32)
+	tok := a.mintSession(7*24*time.Hour, req.Readonly)
 	a.mu.Lock()
-	a.sessions[tok] = time.Now().Add(7 * 24 * time.Hour)
 	delete(a.failures, ip)
-	for k, exp := range a.sessions { // 顺手清理过期会话
-		if time.Now().After(exp) {
-			delete(a.sessions, k)
-		}
-	}
 	a.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+	writeJSON(w, http.StatusOK, map[string]string{"token": tok, "readonly": strconv.FormatBool(req.Readonly)})
+}
+
+// mintReadonlyToken 签发只读管理令牌：POST /api/admin/readonly-token（全权
+// 会话鉴权）。有效期 30 天，仅放行 authRO 白名单内的读端点，重启失效。
+func (a *admin) mintReadonlyToken(w http.ResponseWriter, r *http.Request) {
+	tok := a.mintSession(30*24*time.Hour, true)
+	a.audit(r, "readonly_token.create", "")
+	writeJSON(w, http.StatusOK, map[string]string{"token": tok, "readonly": "true"})
 }
 
 // loginThrottled 报告该来源 IP 是否处于登录失败锁定中（已过期的锁定顺手清除）。
@@ -208,10 +255,7 @@ func (a *admin) ssoLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "sso session invalid"})
 		return
 	}
-	tok := cryptoutil.RandomHex(32)
-	a.mu.Lock()
-	a.sessions[tok] = time.Now().Add(7 * 24 * time.Hour)
-	a.mu.Unlock()
+	tok := a.mintSession(7*24*time.Hour, false)
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
 

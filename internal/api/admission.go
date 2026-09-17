@@ -131,14 +131,14 @@ func (a *keyAdmission) enter(ak *store.APIKey) (release func(), ok bool) {
 func dayLabel() string   { return time.Now().UTC().Format("2006-01-02") }
 func monthLabel() string { return time.Now().UTC().Format("2006-01") }
 
-// admit 返回拒绝时应使用的 HTTP 状态码与原因；0 表示放行。
-func (a *keyAdmission) admit(ak *store.APIKey) (int, string) {
+// admit 返回拒绝时的 HTTP 状态码、机器可读错误码与人读原因；0 表示放行。
+func (a *keyAdmission) admit(ak *store.APIKey) (status int, code, msg string) {
 	now := time.Now()
 	// 过期时间：ExpiresAt 当日（本地时区）结束后失效
 	if ak.ExpiresAt != "" {
 		if t, err := time.ParseInLocation("2006-01-02", ak.ExpiresAt, time.Local); err == nil {
 			if now.After(t.Add(24 * time.Hour)) {
-				return 401, "api key expired on " + ak.ExpiresAt
+				return 401, "key_expired", "api key expired on " + ak.ExpiresAt
 			}
 		}
 	}
@@ -147,7 +147,7 @@ func (a *keyAdmission) admit(ak *store.APIKey) (int, string) {
 	if ak.RPMLimit > 0 {
 		q := pruneTimes(a.rpm[ak.ID], now, time.Minute)
 		if int64(len(q)) >= ak.RPMLimit {
-			return 429, "rate limited: rpm limit reached for this api key"
+			return 429, "rate_limited_rpm", "rate limited: rpm limit reached for this api key"
 		}
 		q = append(q, now)
 		a.rpm[ak.ID] = q
@@ -159,7 +159,7 @@ func (a *keyAdmission) admit(ak *store.APIKey) (int, string) {
 			sum += p.tokens
 		}
 		if sum >= ak.TPMLimit {
-			return 429, "rate limited: tpm limit reached for this api key"
+			return 429, "rate_limited_tpm", "rate limited: tpm limit reached for this api key"
 		}
 		a.tpm[ak.ID] = q
 	}
@@ -172,15 +172,15 @@ func (a *keyAdmission) admit(ak *store.APIKey) (int, string) {
 				a.alerts.fireBudget(ak.ID, ak.Name, use.label, ak.BudgetUSD, used, used >= ak.BudgetUSD)
 			}
 			if used >= ak.BudgetUSD {
-				return 429, "budget exhausted: " + ak.BudgetPeriod + " budget $" +
+				return 429, "budget_exhausted", "budget exhausted: " + ak.BudgetPeriod + " budget $" +
 					formatUSD(ak.BudgetUSD) + " reached for this api key"
 			}
 		}
 		if ak.BudgetTokens > 0 && use.tokens >= ak.BudgetTokens {
-			return 429, "budget exhausted: " + ak.BudgetPeriod + " token budget reached for this api key"
+			return 429, "budget_exhausted", "budget exhausted: " + ak.BudgetPeriod + " token budget reached for this api key"
 		}
 	}
-	return 0, ""
+	return 0, "", ""
 }
 
 // budgetWindow 取预算对应窗口（daily/monthly），标签过期自动清零。

@@ -81,6 +81,20 @@
     </p>
   </div>
 
+  <h2 class="title is-6" style="margin:1.2rem 0 .5rem">只读管理令牌（外部监控 / 仪表盘抓取）</h2>
+  <div class="card" style="padding:1rem;max-width:640px">
+    <div class="is-flex" style="gap:.5rem;align-items:center">
+      <button class="button is-link is-small" id="roBtn">生成只读令牌</button>
+      <input class="input is-small mono" id="roTok" style="display:none;flex:1" readonly>
+      <button class="button is-small" id="roCopy" style="display:none">复制</button>
+    </div>
+    <p class="help is-size-7 has-text-grey" style="margin-top:.5rem">
+      仅放行读端点（仪表盘 / 渠道 / 密钥列表 / 日志 / 指标 / 审计等），不能做任何变更、
+      不能取明文密钥、不能导出配置。有效期 30 天，服务重启后失效（内存态会话）。
+      用法：<code>Authorization: Bearer sk-ro-…</code>，Prometheus 抓取 /metrics 时同样适用。
+    </p>
+  </div>
+
   <h2 class="title is-6" style="margin:1.2rem 0 .5rem">管理操作审计（最近 100 条）</h2>
   <div class="card" style="padding:.8rem 1rem;max-width:640px">
     <div class="is-flex" style="gap:.5rem;align-items:flex-end;margin-bottom:.6rem;flex-wrap:wrap">
@@ -228,6 +242,16 @@ $('audExport').addEventListener('click', async () => {
     URL.revokeObjectURL(a.href);
   } catch (ex) { toast('导出失败：' + ex.message, false); }
 });
+
+$('roBtn').addEventListener('click', async () => {
+  try {
+    const r = await api('/api/admin/readonly-token', { method: 'POST' });
+    $('roTok').style.display = '';
+    $('roCopy').style.display = '';
+    $('roTok').value = r.token;
+  } catch (ex) { toast('生成失败：' + ex.message, false); }
+});
+$('roCopy').addEventListener('click', () => copyText($('roTok').value));
 
 loadCfg();
 loadBodyLog();

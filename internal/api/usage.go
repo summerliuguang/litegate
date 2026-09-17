@@ -19,15 +19,15 @@ type tokenUsage struct {
 // usageFields 兼容 openai（prompt_tokens/completion_tokens/prompt_tokens_details）
 // 与 anthropic（input_tokens/output_tokens/cache_*_input_tokens）两套字段名。
 type usageFields struct {
-	PromptTokens     *int64 `json:"prompt_tokens"`
-	CompletionTokens *int64 `json:"completion_tokens"`
-	InputTokens      *int64 `json:"input_tokens"`
-	OutputTokens     *int64 `json:"output_tokens"`
+	PromptTokens        *int64 `json:"prompt_tokens"`
+	CompletionTokens    *int64 `json:"completion_tokens"`
+	InputTokens         *int64 `json:"input_tokens"`
+	OutputTokens        *int64 `json:"output_tokens"`
 	PromptTokensDetails *struct {
 		CachedTokens int64 `json:"cached_tokens"`
 	} `json:"prompt_tokens_details"`
-	CacheReadTokens    *int64 `json:"cache_read_input_tokens"`
-	CacheCreateTokens  *int64 `json:"cache_creation_input_tokens"`
+	CacheReadTokens   *int64 `json:"cache_read_input_tokens"`
+	CacheCreateTokens *int64 `json:"cache_creation_input_tokens"`
 }
 
 // values 归一化两种口径：openai 的 prompt_tokens 本身就是总输入；anthropic 的

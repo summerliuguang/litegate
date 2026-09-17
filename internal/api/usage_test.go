@@ -37,7 +37,7 @@ func TestInjectStreamUsage(t *testing.T) {
 	}
 	cases := []string{
 		`{"model":"m","stream":true,"stream_options":{"include_usage":true}}`, // 已自带
-		`{"model":"m","messages":[]}`, // 非流式
+		`{"model":"m","messages":[]}`,                                         // 非流式
 		`not-json`,
 	}
 	for _, in := range cases {
@@ -54,8 +54,8 @@ func TestUsageFromJSON(t *testing.T) {
 		completion int64
 		ok         bool
 	}{
-		{`{"usage":{"prompt_tokens":10,"completion_tokens":5}}`, 10, 5, true},       // openai
-		{`{"usage":{"input_tokens":7,"output_tokens":3}}`, 7, 3, true},              // anthropic
+		{`{"usage":{"prompt_tokens":10,"completion_tokens":5}}`, 10, 5, true},        // openai
+		{`{"usage":{"input_tokens":7,"output_tokens":3}}`, 7, 3, true},               // anthropic
 		{`{"message":{"usage":{"input_tokens":25,"output_tokens":1}}}`, 25, 1, true}, // anthropic message_start
 		{`{"usage":null}`, 0, 0, false},
 		{`{"usage":{"prompt_tokens":0,"completion_tokens":0}}`, 0, 0, false},

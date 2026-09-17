@@ -425,7 +425,7 @@ func randHexID() string {
 func (p *proxy) serveResponses(w http.ResponseWriter, r *http.Request) {
 	ak, err := p.authenticate(r)
 	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid api key"})
+		writeErr(w, http.StatusUnauthorized, "invalid_key", "invalid api key")
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
@@ -479,7 +479,7 @@ func (p *proxy) serveResponses(w http.ResponseWriter, r *http.Request) {
 	if len(autoCands) == 0 {
 		chans = filterByModel(chans, in.Model)
 		if len(chans) == 0 {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no enabled channel serves model: " + in.Model})
+			writeErr(w, http.StatusNotFound, "no_channel", "no enabled channel serves model: "+in.Model)
 			return
 		}
 	} else {
@@ -491,28 +491,28 @@ func (p *proxy) serveResponses(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !served {
-			writeJSON(w, http.StatusNotFound, map[string]string{
-				"error": "no enabled channel serves auto candidates: " + strings.Join(autoCands, ", ")})
+			writeErr(w, http.StatusNotFound, "no_channel",
+				"no enabled channel serves auto candidates: "+strings.Join(autoCands, ", "))
 			return
 		}
 	}
 	// 虚拟密钥的模型白名单：留空不限制；配置了则只放行列出的模型
 	if !ak.AllowsModel(in.Model) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "model not allowed for this api key: " + in.Model})
+		writeErr(w, http.StatusForbidden, "model_not_allowed", "model not allowed for this api key: "+in.Model)
 		return
 	}
 	// 准入控制：过期 / RPM/TPM 限速 / 日月预算
-	if code, msg := p.limits.admit(ak); code != 0 {
-		if code == http.StatusTooManyRequests {
+	if status, errCode, msg := p.limits.admit(ak); status != 0 {
+		if status == http.StatusTooManyRequests {
 			w.Header().Set("Retry-After", "60")
 		}
-		writeJSON(w, code, map[string]string{"error": msg})
+		writeErr(w, status, errCode, msg)
 		return
 	}
 	release, ok := p.limits.enter(ak)
 	if !ok {
 		w.Header().Set("Retry-After", "5")
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limited: concurrency limit reached for this api key"})
+		writeErr(w, http.StatusTooManyRequests, "rate_limited_concurrency", "rate limited: concurrency limit reached for this api key")
 		return
 	}
 	defer release()
@@ -901,7 +901,7 @@ func (p *proxy) respondResponsesStream(w http.ResponseWriter, ak *store.APIKey, 
 // 转发上游精确值；否则本地启发式估算（零上游调用、不记请求日志）。
 func (p *proxy) serveCountTokens(w http.ResponseWriter, r *http.Request) {
 	if _, err := p.authenticate(r); err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid api key"})
+		writeErr(w, http.StatusUnauthorized, "invalid_key", "invalid api key")
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))

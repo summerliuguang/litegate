@@ -21,31 +21,31 @@ type UsagePoint struct {
 
 // ModelUsage / ChannelUsage 是近 7 天按维度聚合的用量，按费用降序。
 type ModelUsage struct {
-	Model            string  `json:"model"`
-	Requests         int64   `json:"requests"`
-	PromptTokens     int64   `json:"prompt_tokens"`
-	CompletionTokens int64   `json:"completion_tokens"`
-	CostUSD          float64 `json:"cost_usd"`
+	Model            string             `json:"model"`
+	Requests         int64              `json:"requests"`
+	PromptTokens     int64              `json:"prompt_tokens"`
+	CompletionTokens int64              `json:"completion_tokens"`
+	CostUSD          float64            `json:"cost_usd"`
 	CostByCurrency   map[string]float64 `json:"cost_by_currency,omitempty"`
 }
 
 type ChannelUsage struct {
-	ChannelID        int64   `json:"channel_id"`
-	ChannelName      string  `json:"channel_name"`
-	Requests         int64   `json:"requests"`
-	PromptTokens     int64   `json:"prompt_tokens"`
-	CompletionTokens int64   `json:"completion_tokens"`
-	CostUSD          float64 `json:"cost_usd"`
+	ChannelID        int64              `json:"channel_id"`
+	ChannelName      string             `json:"channel_name"`
+	Requests         int64              `json:"requests"`
+	PromptTokens     int64              `json:"prompt_tokens"`
+	CompletionTokens int64              `json:"completion_tokens"`
+	CostUSD          float64            `json:"cost_usd"`
 	CostByCurrency   map[string]float64 `json:"cost_by_currency,omitempty"`
 }
 
 // AppUsage 是今日按应用（X-LiteGate-App 请求头）分摊的用量，按费用降序。
 type AppUsage struct {
-	App              string  `json:"app"`
-	Requests         int64   `json:"requests"`
-	PromptTokens     int64   `json:"prompt_tokens"`
-	CompletionTokens int64   `json:"completion_tokens"`
-	CostUSD          float64 `json:"cost_usd"`
+	App              string             `json:"app"`
+	Requests         int64              `json:"requests"`
+	PromptTokens     int64              `json:"prompt_tokens"`
+	CompletionTokens int64              `json:"completion_tokens"`
+	CostUSD          float64            `json:"cost_usd"`
 	CostByCurrency   map[string]float64 `json:"cost_by_currency,omitempty"`
 }
 
@@ -67,9 +67,9 @@ type Dashboard struct {
 	ChannelsEnabled     int64              `json:"channels_enabled"`
 	Keys                int64              `json:"keys"`
 	Daily               []UsagePoint       `json:"daily"`
-	ByModel               []ModelUsage   `json:"by_model"`
-	ByChannel             []ChannelUsage `json:"by_channel"`
-	ByApp                 []AppUsage     `json:"by_app"`
+	ByModel             []ModelUsage       `json:"by_model"`
+	ByChannel           []ChannelUsage     `json:"by_channel"`
+	ByApp               []AppUsage         `json:"by_app"`
 }
 
 // 近 7 天（含今天）的时间窗条件，ts 为 UTC 文本。
@@ -85,11 +85,11 @@ func (s *Store) Dashboard() (*Dashboard, error) {
 	today := `ts >= datetime('now', 'start of day')`
 	err := s.DB.QueryRow(`
 		SELECT
-			(SELECT COUNT(*) FROM request_logs WHERE ` + today + `),
-			(SELECT COUNT(*) FROM request_logs WHERE ` + today + ` AND (status >= 400 OR error != '')),
-			(SELECT IFNULL(SUM(prompt_tokens), 0) FROM request_logs WHERE ` + today + `),
-			(SELECT IFNULL(SUM(completion_tokens), 0) FROM request_logs WHERE ` + today + `),
-			(SELECT IFNULL(ROUND(SUM(cost), 6), 0) FROM request_logs WHERE ` + today + `),
+			(SELECT COUNT(*) FROM request_logs WHERE `+today+`),
+			(SELECT COUNT(*) FROM request_logs WHERE `+today+` AND (status >= 400 OR error != '')),
+			(SELECT IFNULL(SUM(prompt_tokens), 0) FROM request_logs WHERE `+today+`),
+			(SELECT IFNULL(SUM(completion_tokens), 0) FROM request_logs WHERE `+today+`),
+			(SELECT IFNULL(ROUND(SUM(cost), 6), 0) FROM request_logs WHERE `+today+`),
 			(SELECT COUNT(*) FROM channels),
 			(SELECT COUNT(*) FROM channels WHERE enabled = 1),
 			(SELECT COUNT(*) FROM api_keys)`).Scan(
