@@ -174,7 +174,8 @@ async function load() {
       if (k.app_name) limits.push('app=' + k.app_name);
       if (k.max_tokens_cap) limits.push('maxTok≤' + k.max_tokens_cap);
       if (k.concurrency_limit) limits.push('并发≤' + k.concurrency_limit);
-      // 预算消耗进度条（与网关拦截同口径的当前窗口用量）：≥80% 黄色预警，超支红色
+      // 预算消耗进度条（与网关拦截同口径的当前窗口用量，¥ 计价成本按设置页
+      // 汇率折算成美元等值）：≥80% 黄色预警，超支红色
       const bp = k.budget_period === 'monthly' ? '月' : '日';
       let budBar = '';
       if (k.budget_usd || k.budget_tokens) {
@@ -182,18 +183,19 @@ async function load() {
         const parts = [];
         if (k.budget_usd) {
           ratio = Math.max(ratio, (k.budget_used_usd || 0) / k.budget_usd);
-          parts.push('$' + (k.budget_used_usd || 0).toFixed(2) + ' / $' + k.budget_usd);
+          parts.push('≈$' + (k.budget_used_usd || 0).toFixed(2) + ' / $' + k.budget_usd);
         }
         if (k.budget_tokens) {
           ratio = Math.max(ratio, (k.budget_used_tokens || 0) / k.budget_tokens);
           parts.push(fmtInt(k.budget_used_tokens || 0) + ' / ' + fmtInt(k.budget_tokens) + ' tok');
         }
+        if (k.budget_used_cny > 0) parts.push('含 ¥' + (k.budget_used_cny || 0).toFixed(2) + ' 折算');
         const pct = Math.min(100, Math.round(ratio * 100));
         const warn = ratio >= 0.8;
         const color = ratio >= 1 ? 'var(--bad,#e05555)' : warn ? 'var(--warn,#e0a800)' : '';
         budBar = `<div style="margin-top:.3rem;max-width:230px">` +
           `<div class="bar-track" style="height:6px"><div class="bar-fill" style="width:${pct}%;${color ? 'background:' + color : ''}"></div></div>` +
-          `<span class="is-size-7 ${warn ? 'has-text-warning-dark' : 'has-text-grey'}" style="display:inline-block;margin-top:.1rem">${warn ? '⚠ ' : ''}${pct}% · ${esc(parts.join(' + '))} /${bp}</span></div>`;
+          `<span class="is-size-7 ${warn ? 'has-text-warning-dark' : 'has-text-grey'}" style="display:inline-block;margin-top:.1rem">${warn ? '⚠ ' : ''}${pct}% · ${esc(parts.join(' · '))} /${bp}</span></div>`;
       }
       const limText = limits.length ? esc(limits.join('，')) : '';
       const tps = k.avg_tps ? k.avg_tps.toFixed(1) + ' tok/s' : '';

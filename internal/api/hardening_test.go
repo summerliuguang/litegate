@@ -215,21 +215,19 @@ func TestHealthzDeep(t *testing.T) {
 	}
 }
 
-// TestKeyDailyUsage 按天聚合：请求数、失败数、token 合计。
+// TestKeyDailyUsage 按天聚合（key_usage_day 账本）：请求数、失败数、token、双币种成本。
 func TestKeyDailyUsage(t *testing.T) {
 	st := newTestStoreOnly(t)
 	ak := &store.APIKey{Name: "t"}
 	if err := st.CreateAPIKey(ak); err != nil {
 		t.Fatalf("create key: %v", err)
 	}
-	logs := []*store.RequestLog{
-		{APIKeyID: ak.ID, Model: "m", Protocol: "openai", Status: 200, PromptTokens: 10, CompletionTokens: 5},
-		{APIKeyID: ak.ID, Model: "m", Protocol: "openai", Status: 500, Error: "boom", PromptTokens: 7},
+	now := time.Now()
+	if err := st.AddKeyUsageDay(ak.ID, now, 1, 0, 15, 0.004, 0); err != nil {
+		t.Fatalf("add usage: %v", err)
 	}
-	for _, l := range logs {
-		if err := st.InsertRequestLog(l); err != nil {
-			t.Fatalf("insert log: %v", err)
-		}
+	if err := st.AddKeyUsageDay(ak.ID, now, 1, 1, 7, 0, 0.5); err != nil {
+		t.Fatalf("add usage: %v", err)
 	}
 	rows, err := st.KeyDailyUsage(ak.ID, 7)
 	if err != nil {
@@ -242,10 +240,168 @@ func TestKeyDailyUsage(t *testing.T) {
 	if r.Requests != 2 || r.Errors != 1 || r.Tokens != 22 {
 		t.Fatalf("row = %+v, want requests=2 errors=1 tokens=22", r)
 	}
-	// 其他密钥的日志不计入
+	if r.CostUSD < 0.004-1e-9 || r.CostCNY < 0.5-1e-9 {
+		t.Fatalf("cost split = %v/%v, want 0.004/0.5", r.CostUSD, r.CostCNY)
+	}
+	// 其他密钥的用量不计入
 	rows, err = st.KeyDailyUsage(ak.ID+100, 7)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("unrelated key rows = %v, err = %v", rows, err)
+	}
+}
+
+// TestKeyUsageDayBackfill 日志 → 账本的一次性聚合：币种按价格表判定，
+// 重复执行幂等；账本独立于日志存在（模拟日志已被清理后仍可回填出完整窗口）。
+func TestKeyUsageDayBackfill(t *testing.T) {
+	st := newTestStoreOnly(t)
+	ak := &store.APIKey{Name: "t"}
+	if err := st.CreateAPIKey(ak); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertModelPrice(&store.ModelPrice{Model: "cny-m", InputPrice: 2, Currency: "CNY"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertModelPrice(&store.ModelPrice{Model: "usd-m", InputPrice: 2}); err != nil {
+		t.Fatal(err)
+	}
+	logs := []*store.RequestLog{
+		{APIKeyID: ak.ID, Model: "cny-m", Status: 200, PromptTokens: 10, CostUSD: 3.6},
+		{APIKeyID: ak.ID, Model: "usd-m", Status: 200, PromptTokens: 5, CostUSD: 0.4},
+		{APIKeyID: ak.ID, Model: "usd-m", Status: 500, Error: "boom", PromptTokens: 1},
+	}
+	for _, l := range logs {
+		if err := st.InsertRequestLog(l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := st.BackfillKeyUsageFromLogs()
+	if err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if n < 1 {
+		t.Fatalf("backfilled groups = %d, want >= 1", n)
+	}
+	cu, cc, tok, err := st.KeyUsageSince(ak.ID, "2000-01-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cu < 0.4-1e-9 || cc < 3.6-1e-9 || tok != 16 {
+		t.Fatalf("since = %v/%v/%v, want 0.4/3.6/16", cu, cc, tok)
+	}
+	// 幂等：已有数据时不再累计
+	n2, err := st.BackfillKeyUsageFromLogs()
+	if err != nil || n2 != 0 {
+		t.Fatalf("second backfill = %d, %v; want 0, nil", n2, err)
+	}
+	// 账本读数不受日志清理影响（模拟月预算 × 短日志保留期的旧缺陷场景）
+	if _, err := st.DB.Exec(`DELETE FROM request_logs`); err != nil {
+		t.Fatal(err)
+	}
+	cu, cc, tok, err = st.KeyUsageSince(ak.ID, "2000-01-01")
+	if err != nil || cu < 0.4-1e-9 || tok != 16 {
+		t.Fatalf("after logs pruned: %v/%v/%v err=%v; usage ledger must survive", cu, cc, tok, err)
+	}
+}
+
+// TestBudgetCurrencyNorm 预算判定按 usd_cny_rate 归一：¥ 计价成本不再被
+// 直接当美元扣，混合币种与纯 CNY 消费都能在正确的点拦截。
+func TestBudgetCurrencyNorm(t *testing.T) {
+	st := newTestStoreOnly(t)
+	ak := &store.APIKey{Name: "t", BudgetUSD: 1, BudgetPeriod: "daily"}
+	if err := st.CreateAPIKey(ak); err != nil {
+		t.Fatal(err)
+	}
+	a := newKeyAdmission(nil)
+	a.load(st)
+
+	a.record(ak, 0, 0, 0, 3.6) // ¥3.6 → 默认汇率 7.2 → $0.5
+	if status, _ := a.admit(ak); status != 0 {
+		t.Fatalf("should allow under budget, got %d", status)
+	}
+	usd, cny, tok := a.budgetUsage(ak)
+	if usd < 0.5-1e-9 || cny < 3.6-1e-9 || tok != 0 {
+		t.Fatalf("budgetUsage = %v/%v/%v, want 0.5/3.6/0", usd, cny, tok)
+	}
+	a.record(ak, 0, 0, 0.5, 0) // 累计 $1.0 等值 → 达到预算
+	if status, msg := a.admit(ak); status != 429 {
+		t.Fatalf("should block at $1 equivalent, got %d (%s)", status, msg)
+	}
+	// 汇率改 3.6 后，同样一笔 ¥3.6 折 $1.0 → 单笔即达预算被拦（旧口径要 7 倍消费才拦）
+	if err := st.SetSetting("usd_cny_rate", "3.6"); err != nil {
+		t.Fatal(err)
+	}
+	a.invalidateRate()
+	if r := a.usdCnyRate(); r != 3.6 {
+		t.Fatalf("rate = %v, want 3.6", r)
+	}
+	a3 := newKeyAdmission(nil)
+	a3.load(st) // load 注入 st（汇率读 settings）；账本为空 → 窗口从零开始
+	a3.record(ak, 0, 0, 0, 3.6)
+	if status, _ := a3.admit(ak); status != 429 {
+		t.Fatalf("¥3.6 at rate 3.6 should reach $1 budget, got %d", status)
+	}
+	// 重启回填路径：新实例从账本重建窗口（本测试未落账本 → 0，应放行）
+	a2 := newKeyAdmission(nil)
+	a2.load(st)
+	if status, _ := a2.admit(ak); status != 0 {
+		t.Fatalf("fresh instance with empty ledger should allow, got %d", status)
+	}
+}
+
+// TestBudgetConfigAPI 预算汇率配置端点：默认值、更新、非法值拒绝、审计。
+func TestBudgetConfigAPI(t *testing.T) {
+	srv, st := newTestServer(t)
+	tok := adminToken(t, srv)
+	h := map[string]string{"Authorization": "Bearer " + tok}
+
+	rec := do(srv, "GET", "/api/admin/budget", "", h)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "7.2") {
+		t.Fatalf("default rate = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = do(srv, "PUT", "/api/admin/budget", `{"usd_cny_rate":6.5}`, h)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = do(srv, "GET", "/api/admin/budget", "", h)
+	if !strings.Contains(rec.Body.String(), "6.5") {
+		t.Fatalf("updated rate missing: %s", rec.Body.String())
+	}
+	rec = do(srv, "PUT", "/api/admin/budget", `{"usd_cny_rate":-1}`, h)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid rate = %d, want 400", rec.Code)
+	}
+	auditOK := false
+	rows, _ := st.ListAudit(50)
+	for _, a := range rows {
+		if a.Action == "budget.update" && strings.Contains(a.Detail, "6.5") {
+			auditOK = true
+		}
+	}
+	if !auditOK {
+		t.Fatal("budget.update not audited")
+	}
+}
+
+// TestLogsKeyIndex 按密钥过滤应命中专用索引（随用量增长的前置防线）。
+func TestLogsKeyIndex(t *testing.T) {
+	st := newTestStoreOnly(t)
+	rows, err := st.DB.Query(`EXPLAIN QUERY PLAN SELECT * FROM request_logs WHERE api_key_id = 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var a, b, c, detail string
+		if err := rows.Scan(&a, &b, &c, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(detail, "idx_logs_key") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("api_key_id filter does not use idx_logs_key")
 	}
 }
 

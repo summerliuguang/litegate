@@ -54,6 +54,14 @@ func main() {
 	}
 	defer st.Close()
 
+	// 一次性迁移：空账本 + 有历史日志时，把日志聚合进 key_usage_day
+	// （币种按当前价格表判定）。之后预算回填只依赖账本，日志清理不影响预算。
+	if n, err := st.BackfillKeyUsageFromLogs(); err != nil {
+		log.Printf("key_usage_day 回填失败（不影响启动）: %v", err)
+	} else if n > 0 {
+		log.Printf("已从请求日志回填密钥按日用量 %d 组（key_usage_day）", n)
+	}
+
 	if n, err := st.CountAPIKeys(); err == nil && n == 0 {
 		k := &store.APIKey{Name: "default"}
 		if err := st.CreateAPIKey(k); err == nil {
@@ -65,7 +73,11 @@ func main() {
 	handler := api.NewServer(st, cfg.AdminPassword, web.Handler(), cfg.PanelHosts)
 	api.StartKeyHealthChecker(st, 2*time.Minute)
 
-	// 日志保留策略：启动时清一次，之后每 6 小时清一次；0 天（默认）= 永久保留
+	// 日志保留策略：启动时清一次，之后每 6 小时清一次；0 天（默认）= 永久保留。
+	// key_usage_day 账本独立保留 400 天（覆盖最长月预算窗口 + 余量）。
+	if n, err := st.PruneKeyUsageDays(400); err == nil && n > 0 {
+		log.Printf("已清理 %d 行过期的密钥按日用量", n)
+	}
 	if cfg.LogRetentionDays > 0 {
 		go func(days int) {
 			ticker := time.NewTicker(6 * time.Hour)
@@ -75,6 +87,11 @@ func main() {
 					log.Printf("清理 %d 天前日志失败: %v", days, err)
 				} else if n > 0 {
 					log.Printf("已清理 %d 天前的请求日志 %d 条", days, n)
+				}
+				if n, err := st.PruneKeyUsageDays(400); err != nil {
+					log.Printf("清理密钥按日用量失败: %v", err)
+				} else if n > 0 {
+					log.Printf("已清理 %d 行过期的密钥按日用量", n)
 				}
 				<-ticker.C
 			}

@@ -49,6 +49,18 @@
     </p>
   </div>
 
+  <h2 class="title is-6" style="margin:1.2rem 0 .5rem">预算归一汇率</h2>
+  <div class="card" style="padding:1rem;max-width:640px">
+    <div class="field" style="max-width:260px"><label class="label is-size-7">1 美元 = ? 人民币</label>
+      <input class="input is-small" id="rateVal" type="number" min="0.1" max="1000" step="0.01" value="7.2"></div>
+    <p id="rErr" class="help is-danger" style="min-height:1.2em"></p>
+    <button class="button is-link is-small" id="rSave">保存汇率</button>
+    <p class="help is-size-7 has-text-grey" style="margin-top:.4rem">
+      只用于预算拦截口径：¥ 计价模型的成本按此汇率折算成美元等值后与 budget_usd 比较
+      （成本展示不受影响，仍按 ¥/$ 拆分显示）。改后立即生效，历史累计按新汇率重算。
+    </p>
+  </div>
+
   <h2 class="title is-6" style="margin:1.2rem 0 .5rem">日志正文采样（回放排障用）</h2>
   <div class="card" style="padding:1rem;max-width:640px">
     <label class="checkbox is-size-7" style="margin-bottom:.6rem">
@@ -165,8 +177,26 @@ $('bSave').addEventListener('click', async () => {
   } catch (ex) { $('bErr').textContent = ex.message; }
 });
 
+async function loadBudget() {
+  try {
+    const c = await api('/api/admin/budget');
+    $('rateVal').value = c.usd_cny_rate || 7.2;
+  } catch (ex) { $('rErr').textContent = ex.message; }
+}
+$('rSave').addEventListener('click', async () => {
+  $('rErr').textContent = '';
+  try {
+    await api('/api/admin/budget', {
+      method: 'PUT',
+      body: JSON.stringify({ usd_cny_rate: parseFloat($('rateVal').value) || 0 }),
+    });
+    toast('汇率已保存，预算判定即时生效');
+  } catch (ex) { $('rErr').textContent = ex.message; }
+});
+
 loadCfg();
 loadBodyLog();
+loadBudget();
 loadAudit();
 </script>
 </body>

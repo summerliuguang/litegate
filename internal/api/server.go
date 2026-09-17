@@ -51,6 +51,7 @@ func NewServer(st *store.Store, adminPassword string, webHandler http.Handler, p
 	a.invalidatePrices = p.invalidatePriceCache
 	a.invalidateBodyLog = p.invalidateBodyLogCfg
 	a.budgetUsage = p.limits.budgetUsage
+	a.invalidateRate = p.limits.invalidateRate
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("deep") == "" {

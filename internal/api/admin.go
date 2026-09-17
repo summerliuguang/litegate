@@ -27,9 +27,12 @@ type admin struct {
 	invalidateModels  func()
 	invalidatePrices  func()
 	invalidateBodyLog func()
-	// budgetUsage 读数据面内存中的密钥预算用量（与拦截同口径），列表页画进度条用。
-	budgetUsage func(*store.APIKey) (float64, int64)
-	alerts      *alertManager
+	// budgetUsage 读数据面内存中的密钥预算用量（归一美元等值/人民币原始值/token，
+	// 与拦截同口径），列表页画进度条用。
+	budgetUsage func(*store.APIKey) (float64, float64, int64)
+	// invalidateRate 预算汇率变更后失效 admission 的汇率缓存。
+	invalidateRate func()
+	alerts         *alertManager
 
 	mu       sync.Mutex
 	sessions map[string]time.Time
@@ -67,6 +70,8 @@ func (a *admin) register(mux *http.ServeMux) {
 	mux.Handle("PUT /api/admin/keys/{id}", a.auth(a.updateKey))
 	mux.Handle("GET /api/admin/keys/{id}/reveal", a.auth(a.revealKey))
 	mux.Handle("GET /api/admin/keys/{id}/usage", a.auth(a.keyUsage))
+	mux.Handle("GET /api/admin/budget", a.auth(a.getBudget))
+	mux.Handle("PUT /api/admin/budget", a.auth(a.putBudget))
 	mux.Handle("DELETE /api/admin/keys/{id}", a.auth(a.deleteKey))
 	mux.Handle("GET /api/admin/channels/{id}/discover", a.auth(a.discoverChannelModels))
 	mux.Handle("POST /api/admin/db/backup", a.auth(a.backupDB))
@@ -622,8 +627,10 @@ type apiKeyOut struct {
 	// 近 7 天输出速度统计（成功且可计算的请求）
 	AvgTps     float64 `json:"avg_tps"`
 	RecentReqs int64   `json:"recent_requests"`
-	// 当前预算窗口已用（与拦截判定同口径；未配预算时为 0）
+	// 当前预算窗口用量：budget_used_usd 为按汇率归一的美元等值（与拦截同口径），
+	// budget_used_cny 为人民币原始累计（进度条展示构成用）；未配预算时为 0
 	BudgetUsedUSD    float64 `json:"budget_used_usd"`
+	BudgetUsedCNY    float64 `json:"budget_used_cny"`
 	BudgetUsedTokens int64   `json:"budget_used_tokens"`
 }
 
@@ -646,10 +653,10 @@ func (a *admin) listKeys(w http.ResponseWriter, _ *http.Request) {
 			tps = math.Round(st.Tps()*10) / 10
 			recent = st.Requests
 		}
-		var usedCost float64
+		var usedUSD, usedCNY float64
 		var usedTok int64
 		if a.budgetUsage != nil {
-			usedCost, usedTok = a.budgetUsage(k)
+			usedUSD, usedCNY, usedTok = a.budgetUsage(k)
 		}
 		out = append(out, apiKeyOut{
 			ID: k.ID, Key: maskApiKey(k.Key), Name: k.Name,
@@ -660,7 +667,7 @@ func (a *admin) listKeys(w http.ResponseWriter, _ *http.Request) {
 			AppName: k.AppName, ModelAlias: k.ModelAlias,
 			MaxTokensCap: k.MaxTokensCap, ConcurrencyLimit: k.ConcurrencyLimit,
 			AvgTps: tps, RecentReqs: recent,
-			BudgetUsedUSD: usedCost, BudgetUsedTokens: usedTok,
+			BudgetUsedUSD: usedUSD, BudgetUsedCNY: usedCNY, BudgetUsedTokens: usedTok,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -798,6 +805,48 @@ func (a *admin) keyUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"days": days, "items": rows})
+}
+
+// getBudget 读预算归一配置：GET /api/admin/budget → {usd_cny_rate}。
+func (a *admin) getBudget(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]float64{"usd_cny_rate": a.budgetRate()})
+}
+
+// putBudget 更新预算归一汇率：PUT /api/admin/budget {usd_cny_rate}。
+// 只影响预算拦截与进度条口径，成本展示仍按各行币种拆分。
+func (a *admin) putBudget(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		USDCNYRate float64 `json:"usd_cny_rate"`
+	}
+	if readJSON(w, r, &in) != nil {
+		return
+	}
+	if in.USDCNYRate <= 0 || in.USDCNYRate > 1000 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "usd_cny_rate must be in (0, 1000]"})
+		return
+	}
+	if err := a.st.SetSetting("usd_cny_rate", strconv.FormatFloat(in.USDCNYRate, 'g', -1, 64)); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if a.invalidateRate != nil {
+		a.invalidateRate()
+	}
+	a.audit(r, "budget.update", "usd_cny_rate="+formatUSD(in.USDCNYRate))
+	writeJSON(w, http.StatusOK, map[string]float64{"usd_cny_rate": in.USDCNYRate})
+}
+
+// budgetRate 读当前生效汇率（设置缺失/非法时回退默认值），getBudget 展示用。
+func (a *admin) budgetRate() float64 {
+	if a.st == nil {
+		return defaultUSDCNYRate
+	}
+	if v, err := a.st.GetSetting("usd_cny_rate"); err == nil {
+		if f, perr := strconv.ParseFloat(v, 64); perr == nil && f > 0 {
+			return f
+		}
+	}
+	return defaultUSDCNYRate
 }
 
 // audit 记录一条管理操作审计（detail 只含名称/ID，严禁密钥明文或令牌）。

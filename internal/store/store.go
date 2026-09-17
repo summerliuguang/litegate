@@ -76,6 +76,20 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 CREATE INDEX IF NOT EXISTS idx_logs_ts ON request_logs(ts);
 CREATE INDEX IF NOT EXISTS idx_logs_channel ON request_logs(channel_id);
+CREATE INDEX IF NOT EXISTS idx_logs_key ON request_logs(api_key_id);
+-- 密钥按天用量累计（预算回填与趋势图共用）：独立于 request_logs 生存，
+-- 日志按保留期清理后预算账本不丢（修月预算 × 短日志保留期的漏账）。
+-- 成本按币种拆列（cost_usd/cost_cny），币种在写入侧由价格表判定。
+CREATE TABLE IF NOT EXISTS key_usage_day (
+	api_key_id INTEGER NOT NULL,
+	day        TEXT NOT NULL,
+	requests   INTEGER NOT NULL DEFAULT 0,
+	errors     INTEGER NOT NULL DEFAULT 0,
+	tokens     INTEGER NOT NULL DEFAULT 0,
+	cost_usd   REAL NOT NULL DEFAULT 0,
+	cost_cny   REAL NOT NULL DEFAULT 0,
+	PRIMARY KEY(api_key_id, day)
+);
 CREATE TABLE IF NOT EXISTS admin_audit (
 	id     INTEGER PRIMARY KEY AUTOINCREMENT,
 	ts     TEXT NOT NULL DEFAULT (datetime('now')),

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 )
 
 type RequestLog struct {
@@ -181,41 +180,7 @@ func (s *Store) LogSummaries(f LogFilter) ([]LogSummary, error) {
 	return out, rows.Err()
 }
 
-// KeyDailyUsageRow 是某密钥单天的用量聚合（趋势图用）。
-type KeyDailyUsageRow struct {
-	Day      string  `json:"day"` // UTC "2026-09-17"
-	Requests int64   `json:"requests"`
-	Errors   int64   `json:"errors"`
-	Tokens   int64   `json:"tokens"` // 输入 + 输出
-	Cost     float64 `json:"cost"`
-}
-
-// KeyDailyUsage 按天聚合某密钥近 days 天的用量（UTC 日对齐，与日志 ts 口径一致）。
-func (s *Store) KeyDailyUsage(keyID int64, days int) ([]KeyDailyUsageRow, error) {
-	if days <= 0 || days > 90 {
-		days = 7
-	}
-	since := time.Now().UTC().AddDate(0, 0, -days+1).Format("2006-01-02") + " 00:00:00"
-	rows, err := s.DB.Query(
-		`SELECT substr(ts,1,10) AS day, COUNT(*), IFNULL(SUM(status >= 400 OR error != ''), 0),
-		        IFNULL(SUM(prompt_tokens + completion_tokens), 0), IFNULL(ROUND(SUM(cost), 6), 0)
-		 FROM request_logs
-		 WHERE api_key_id = ? AND ts >= ?
-		 GROUP BY day ORDER BY day`, keyID, since)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []KeyDailyUsageRow{}
-	for rows.Next() {
-		var r KeyDailyUsageRow
-		if err := rows.Scan(&r.Day, &r.Requests, &r.Errors, &r.Tokens, &r.Cost); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
-}
+// KeyDailyUsageRow 与 KeyDailyUsage 已移至 usage.go（读 key_usage_day 账本）。
 
 // PruneLogs 删除 days 天前的请求日志，返回删除行数；days <= 0 时不删除。
 // 由调用方按保留策略周期性调用（SQLite 单连接，删除大表时段短暂占用写锁）。

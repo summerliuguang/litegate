@@ -233,16 +233,6 @@ func (s *Store) CountAPIKeys() (int64, error) {
 	return n, err
 }
 
-// UsageSince 汇总某密钥自 since（UTC "YYYY-MM-DD HH:MM:SS"）以来的成本与 token 总量，
-// 供预算窗口使用；无记录返回 0。
-func (s *Store) UsageSince(apiKeyID int64, since string) (cost float64, tokens int64, err error) {
-	err = s.DB.QueryRow(
-		`SELECT COALESCE(SUM(cost),0), COALESCE(SUM(prompt_tokens+completion_tokens),0)
-		 FROM request_logs WHERE api_key_id = ? AND ts >= ?`, apiKeyID, since,
-	).Scan(&cost, &tokens)
-	return cost, tokens, err
-}
-
 // KeySpeedStat 是单个虚拟密钥的输出速度聚合。
 type KeySpeedStat struct {
 	APIKeyID         int64

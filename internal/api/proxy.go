@@ -938,7 +938,18 @@ func (p *proxy) logRequest(ak *store.APIKey, c *store.Channel, protocol, model s
 		price = p.lookupPrice(model)
 	}
 	cost := store.CostOf(price, time.Now(), u.prompt, u.cacheRead, u.cacheWrite, u.completion)
-	p.limits.record(ak, u.prompt, u.completion, cost)
+	// 成本按价格表币种拆列：预算累计/按日账本分币种入账，展示层负责合成
+	cur := ""
+	var costUSD, costCNY float64
+	if price != nil {
+		cur = price.Currency
+		if cur == "CNY" {
+			costCNY = cost
+		} else {
+			costUSD = cost
+		}
+	}
+	p.limits.record(ak, u.prompt, u.completion, costUSD, costCNY)
 	l := &store.RequestLog{
 		Model: model, Protocol: protocol, App: app, Status: status,
 		LatencyMs: total.Milliseconds(), TtfbMs: ttfb.Milliseconds(),
@@ -955,11 +966,19 @@ func (p *proxy) logRequest(ak *store.APIKey, c *store.Channel, protocol, model s
 	if err := p.st.InsertRequestLog(l); err != nil {
 		log.Printf("insert request log: %v", err)
 	}
-	p.checkErrorRate(status)
-	cur := ""
-	if price != nil {
-		cur = price.Currency
+	// 按日用量账本：所有带密钥的请求都入账（预算回填/趋势图共用，
+	// 独立于日志保留期，月预算跨重启不漏账）
+	if ak != nil {
+		var errFlag int64
+		if status >= 400 || errMsg != "" {
+			errFlag = 1
+		}
+		if err := p.st.AddKeyUsageDay(ak.ID, time.Now(), 1, errFlag,
+			u.prompt+u.completion, costUSD, costCNY); err != nil {
+			log.Printf("add key usage day: %v", err)
+		}
 	}
+	p.checkErrorRate(status)
 	p.metrics.observe(model, protocol, status, total.Milliseconds(), u.prompt, u.completion, u.cacheRead, cost, cur)
 	return l.ID
 }
