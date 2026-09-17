@@ -1,3 +1,5 @@
+# 模板：安装时复制到 /etc/systemd/system/ 并按实际部署环境修改
+# User 与各路径（本机运行的以 /etc/systemd/system/ 下的副本为准）。
 [Unit]
 Description=LiteGate AI 网关
 After=network-online.target
@@ -5,10 +7,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=liuguang
-WorkingDirectory=/home/liuguang/web-projects/litegate
-ExecStart=/home/liuguang/web-projects/litegate/litegate -addr 127.0.0.1:8080 -db /home/liuguang/.local/share/litegate/litegate.db
-EnvironmentFile=/home/liuguang/web-projects/litegate/deploy/litegate.env
+User=app
+WorkingDirectory=/opt/litegate
+ExecStart=/opt/litegate/litegate -addr 127.0.0.1:8080 -db /var/lib/litegate/litegate.db
+EnvironmentFile=/opt/litegate/deploy/litegate.env
 Restart=always
 RestartSec=3
 # 优雅退出窗口：略大于进程内 LITEGATE_SHUTDOWN_TIMEOUT（默认 30s），

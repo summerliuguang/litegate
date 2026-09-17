@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # LiteGate 数据库每日在线备份：通过管理 API 触发 VACUUM INTO，并清理过期备份文件。
-# 由 litegate-backup.timer 以 liuguang 用户运行；管理密码从 deploy/litegate.env 读取。
+# 由 litegate-backup.timer 运行；管理密码从 deploy/litegate.env 读取。
+# 路径约定：仓库根目录从脚本自身位置推导（软链/搬家无需改动），
+# 数据目录可用环境变量 LITEGATE_DATA_DIR 覆盖（默认 ~/.local/share/litegate）。
 set -euo pipefail
 
-ENV_FILE="/home/liuguang/web-projects/litegate/deploy/litegate.env"
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DATA_DIR="${LITEGATE_DATA_DIR:-$HOME/.local/share/litegate}"
+ENV_FILE="$BASE_DIR/deploy/litegate.env"
 API="http://127.0.0.1:8080"
-BACKUP_DIR="/home/liuguang/.local/share/litegate/backups"
+BACKUP_DIR="$DATA_DIR/backups"
 KEEP_DAYS=14
 
 PW=$(grep -oP '(?<=^LITEGATE_ADMIN_PASSWORD=).*' "$ENV_FILE")
