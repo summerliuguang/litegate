@@ -11,6 +11,10 @@ ExecStart=/home/liuguang/web-projects/litegate/litegate -addr 127.0.0.1:8080 -db
 EnvironmentFile=/home/liuguang/web-projects/litegate/deploy/litegate.env
 Restart=always
 RestartSec=3
+# 优雅退出窗口：略大于进程内 LITEGATE_SHUTDOWN_TIMEOUT（默认 30s），
+# 保证在途流式请求能排空而不是被 systemd 强杀
+TimeoutStopSec=35s
+KillSignal=SIGTERM
 NoNewPrivileges=true
 PrivateTmp=true
 

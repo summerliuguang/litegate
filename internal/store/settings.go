@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"litegate/internal/cryptoutil"
@@ -71,19 +72,72 @@ type AdminAudit struct {
 	IP     string `json:"ip"`
 }
 
-// InsertAudit 记录一条管理操作；超过 1000 条时顺带清理最旧的（低频操作，开销可忽略）。
+// auditKeepBounds 是审计保留条数的钳制范围：下限防误配为 0 关掉审计，
+// 上限防无界表增长。
+const (
+	auditKeepMin = 100
+	auditKeepMax = 100000
+)
+
+// AuditKeep 返回审计保留条数（settings 表 audit_keep，60s 缓存，默认 5000）。
+// reveal/export 记账后审计写入频率上升，1000 条的旧上限会把渠道变更记录
+// 挤掉，故默认提到 5000。
+func (s *Store) AuditKeep() int {
+	s.auditMu.Lock()
+	defer s.auditMu.Unlock()
+	if s.auditKeep > 0 && time.Now().Before(s.auditExpire) {
+		return s.auditKeep
+	}
+	keep := 5000
+	if v, err := s.GetSetting("audit_keep"); err == nil {
+		if n, perr := strconv.Atoi(v); perr == nil {
+			keep = n
+		}
+	}
+	if keep < auditKeepMin {
+		keep = auditKeepMin
+	}
+	if keep > auditKeepMax {
+		keep = auditKeepMax
+	}
+	s.auditKeep = keep
+	s.auditExpire = time.Now().Add(time.Minute)
+	return keep
+}
+
+// SetAuditKeep 写入保留条数并立即失效缓存。
+func (s *Store) SetAuditKeep(n int) error {
+	if n < auditKeepMin {
+		n = auditKeepMin
+	}
+	if n > auditKeepMax {
+		n = auditKeepMax
+	}
+	if err := s.SetSetting("audit_keep", strconv.Itoa(n)); err != nil {
+		return err
+	}
+	s.auditMu.Lock()
+	s.auditKeep = n
+	s.auditExpire = time.Now().Add(time.Minute)
+	s.auditMu.Unlock()
+	return nil
+}
+
+// InsertAudit 记录一条管理操作；超过保留条数（audit_keep）时顺带清理最旧的
+// （低频操作，开销可忽略）。
 func (s *Store) InsertAudit(action, detail, ip string) error {
 	_, err := s.DB.Exec(`INSERT INTO admin_audit(action, detail, ip) VALUES(?, ?, ?)`, action, detail, ip)
 	if err != nil {
 		return err
 	}
-	_, _ = s.DB.Exec(`DELETE FROM admin_audit WHERE id <= (SELECT MAX(id) - 1000 FROM admin_audit)`)
+	_, _ = s.DB.Exec(`DELETE FROM admin_audit WHERE id <= (SELECT MAX(id) - ? FROM admin_audit)`, s.AuditKeep())
 	return nil
 }
 
-// ListAudit 返回最近的审计记录（新→旧）。
+// ListAudit 返回最近的审计记录（新→旧）。limit 上限放到审计保留上限，
+// 供全量导出使用。
 func (s *Store) ListAudit(limit int) ([]AdminAudit, error) {
-	if limit <= 0 || limit > 500 {
+	if limit <= 0 || limit > auditKeepMax {
 		limit = 200
 	}
 	rows, err := s.DB.Query(

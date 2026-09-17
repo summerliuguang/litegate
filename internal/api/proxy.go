@@ -747,6 +747,11 @@ func (p *proxy) respond(w http.ResponseWriter, ak *store.APIKey, c *store.Channe
 		var scan sseUsageScanner
 		_, err = streamCopy(w, resp.Body, &scan)
 		u = scan.usage
+		if err != nil {
+			// 流中途断掉：响应头已发出，状态码改不了，尽力补一个客户端可
+			// 识别的错误终止事件（完整结束的流不含它，客户端能区分截断）。
+			writeStreamErrorEvent(w, protocol)
+		}
 	} else {
 		tail := &tailBuffer{cap: maxUsageTail}
 		_, err = io.Copy(w, io.TeeReader(resp.Body, tail))
@@ -900,6 +905,28 @@ func streamCopy(w http.ResponseWriter, src io.Reader, scan *sseUsageScanner) (in
 				return total, nil
 			}
 			return total, err
+		}
+	}
+}
+
+// writeStreamErrorEvent 在 SSE 流中断后补发协议对应的错误终止事件再结束响应：
+// Anthropic 协议有原生 error 事件；OpenAI 协议发 error 数据块 + [DONE]（主流
+// 客户端能识别或安全忽略）。客户端已断开时写入静默失败，无副作用。
+func writeStreamErrorEvent(w http.ResponseWriter, protocol string) {
+	var evt string
+	switch protocol {
+	case "anthropic":
+		evt = "event: error\ndata: " +
+			`{"type":"error","error":{"type":"api_error","message":"upstream stream interrupted"}}` + "\n\n"
+	case "openai":
+		evt = "data: " +
+			`{"error":{"message":"upstream stream interrupted","type":"api_error"}}` + "\n\ndata: [DONE]\n\n"
+	default:
+		return
+	}
+	if _, werr := io.WriteString(w, evt); werr == nil {
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
 		}
 	}
 }

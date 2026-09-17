@@ -61,6 +61,9 @@ func (a *admin) register(mux *http.ServeMux) {
 	mux.Handle("POST /api/admin/channels/{id}/models/disable/{model...}", a.auth(a.disableChannelModel))
 	mux.Handle("POST /api/admin/channels/{id}/models/enable/{model...}", a.auth(a.enableChannelModel))
 	mux.Handle("GET /api/admin/audit", a.auth(a.listAudit))
+	mux.Handle("GET /api/admin/audit/export", a.auth(a.exportAudit))
+	mux.Handle("GET /api/admin/audit-config", a.auth(a.getAuditCfg))
+	mux.Handle("PUT /api/admin/audit-config", a.auth(a.putAuditCfg))
 	mux.Handle("GET /api/admin/bodylog", a.auth(a.getBodyLog))
 	mux.Handle("PUT /api/admin/bodylog", a.auth(a.putBodyLog))
 	mux.Handle("GET /api/admin/bodylog/{id}", a.auth(a.getRequestBody))
@@ -805,6 +808,42 @@ func (a *admin) keyUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"days": days, "items": rows})
+}
+
+// exportAudit 全量导出审计记录（JSON 附件）：GET /api/admin/audit/export。
+func (a *admin) exportAudit(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.st.ListAudit(100000)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	a.audit(r, "audit.export", "")
+	w.Header().Set("Content-Disposition", `attachment; filename="litegate-audit.json"`)
+	writeJSON(w, http.StatusOK, rows)
+}
+
+// getAuditCfg / putAuditCfg 审计保留条数配置：GET/PUT /api/admin/audit-config。
+func (a *admin) getAuditCfg(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]int{"keep": a.st.AuditKeep()})
+}
+
+func (a *admin) putAuditCfg(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Keep int `json:"keep"`
+	}
+	if readJSON(w, r, &in) != nil {
+		return
+	}
+	if in.Keep < 100 || in.Keep > 100000 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "keep must be in [100, 100000]"})
+		return
+	}
+	if err := a.st.SetAuditKeep(in.Keep); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	a.audit(r, "audit.update", "keep="+strconv.Itoa(in.Keep))
+	writeJSON(w, http.StatusOK, map[string]int{"keep": in.Keep})
 }
 
 // getBudget 读预算归一配置：GET /api/admin/budget → {usd_cny_rate}。

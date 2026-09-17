@@ -38,11 +38,12 @@ func NewServer(st *store.Store, adminPassword string, webHandler http.Handler, p
 		st:          st,
 		client:      newUpstreamClient(),
 		idleTimeout: upstreamIdleTimeout(),
-		keys:        newKeyHealthManager(alerts),
+		keys:        newKeyHealthManager(st, alerts),
 		limits:      newKeyAdmission(alerts),
 		alerts:      alerts,
 		metrics:     newMetricsState(),
 	}
+	p.keys.restore(st) // 恢复重启前未到期的密钥冷却，避免对坏上游惊群重试
 	p.limits.load(st)
 	serverProxy = p
 	p.register(mux)

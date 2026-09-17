@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -105,11 +106,20 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	// 优雅退出窗口：默认 30s（原 5s 会掐断所有超过 5 秒的在途流式请求），
+	// LITEGATE_SHUTDOWN_TIMEOUT 秒数可调；systemd 侧 TimeoutStopSec 需大于该值。
+	shutdownGrace := 30 * time.Second
+	if s := os.Getenv("LITEGATE_SHUTDOWN_TIMEOUT"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			shutdownGrace = time.Duration(n) * time.Second
+		}
+	}
+
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 		defer cancel()
 		_ = srv.Shutdown(ctx)
 	}()

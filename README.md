@@ -46,10 +46,17 @@ LITEGATE_ADMIN_PASSWORD=你的管理密码 ./litegate -addr :8080 -db /var/lib/l
 | `LITEGATE_SECRET` | 32 字节（64 位十六进制）主密钥，用于加密渠道凭证；不设则首次启动自动生成并存库；**设了但格式非法时拒绝启动**（静默回退会导致旧密文解不开） | 自动生成 |
 | `LITEGATE_PANEL_HOSTS` | 面板 Host 白名单（逗号分隔），SSO 回跳地址只从中选取，防止伪造 Host 头开放重定向 | `192.168.5.15:29007,127.0.0.1:8080,localhost:8080` |
 | `LITEGATE_STREAM_IDLE_TIMEOUT` | 上游响应体空闲上限（秒）：连续无字节进展即中断连接，防止上游挂起占死连接；默认关闭，需要时设正数秒启用 | `0`（关闭） |
+| `LITEGATE_SHUTDOWN_TIMEOUT` | 优雅退出窗口（秒）：收到 SIGTERM 后等待在途请求（含流式）排空的时间；systemd 单元的 `TimeoutStopSec` 应大于该值 | `30` |
 | `LITEGATE_LOG_RETENTION_DAYS` | 请求日志保留天数，启动与每 6 小时自动清理；0 永久保留 | `0` |
 
 安全响应头（`X-Content-Type-Options` / `X-Frame-Options: DENY` / `Referrer-Policy` / `CSP`）
 对所有响应统一注入；管理令牌签发与 SSO 换票同权，登录接口带 IP 级失败锁定（5 次锁 60 秒）。
+
+**关于渠道凭证加密的边界**：上游密钥用 AES-256-GCM 加密后落库，主密钥来源为
+`LITEGATE_SECRET`；未设置该变量时自动生成并**存放在同一个数据库的 settings 表里**——
+此时静态加密仅防「只拿到密文库、没拿到库内主密钥行」的场景，能读整库的人即可解出
+全部凭证。要真正的静态加密，需把主密钥外置到环境变量（与数据库文件分开保管），
+并接受「env 丢失 = 密文永久无法解密」的代价。按部署方的威胁模型自行决定。
 
 生产环境建议用 systemd 托管（`Restart=always`）。
 

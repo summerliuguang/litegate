@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -17,6 +19,10 @@ type Store struct {
 	DB     *sql.DB
 	secret []byte
 	path   string // 数据库文件路径，备份目录按它推导
+
+	auditMu     sync.Mutex
+	auditKeep   int       // 审计保留条数缓存（settings 表 audit_keep）
+	auditExpire time.Time // 60s 缓存过期点
 }
 
 var ErrNotFound = errors.New("record not found")

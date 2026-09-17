@@ -82,7 +82,14 @@
   </div>
 
   <h2 class="title is-6" style="margin:1.2rem 0 .5rem">管理操作审计（最近 100 条）</h2>
-  <div class="card" style="padding:.6rem;max-width:640px">
+  <div class="card" style="padding:.8rem 1rem;max-width:640px">
+    <div class="is-flex" style="gap:.5rem;align-items:flex-end;margin-bottom:.6rem;flex-wrap:wrap">
+      <div class="field" style="margin:0;width:160px"><label class="label is-size-7">保留条数</label>
+        <input class="input is-small" id="audKeep" type="number" min="100" max="100000" value="5000"></div>
+      <button class="button is-link is-small" id="audSave">保存</button>
+      <button class="button is-small" id="audExport">导出 JSON</button>
+      <span id="audMsg" class="is-size-7 has-text-grey" style="align-self:center"></span>
+    </div>
     <table class="table is-fullwidth is-size-7" style="border-radius:8px">
       <thead><tr><th>时间</th><th>操作</th><th>详情</th><th>来源 IP</th></tr></thead>
       <tbody id="auditRows"><tr><td colspan="4" class="has-text-grey">加载中…</td></tr></tbody>
@@ -194,9 +201,38 @@ $('rSave').addEventListener('click', async () => {
   } catch (ex) { $('rErr').textContent = ex.message; }
 });
 
+async function loadAuditCfg() {
+  try {
+    const c = await api('/api/admin/audit-config');
+    $('audKeep').value = c.keep || 5000;
+  } catch (_) { /* 不阻塞审计列表 */ }
+}
+$('audSave').addEventListener('click', async () => {
+  $('audMsg').textContent = '';
+  try {
+    await api('/api/admin/audit-config', {
+      method: 'PUT',
+      body: JSON.stringify({ keep: parseInt($('audKeep').value, 10) || 5000 }),
+    });
+    $('audMsg').textContent = '已保存';
+  } catch (ex) { $('audMsg').textContent = '保存失败：' + ex.message; }
+});
+$('audExport').addEventListener('click', async () => {
+  try {
+    const rows = await api('/api/admin/audit/export');
+    const blob = new Blob([JSON.stringify(rows, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'litegate-audit.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (ex) { toast('导出失败：' + ex.message, false); }
+});
+
 loadCfg();
 loadBodyLog();
 loadBudget();
+loadAuditCfg();
 loadAudit();
 </script>
 </body>

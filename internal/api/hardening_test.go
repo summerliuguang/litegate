@@ -382,6 +382,66 @@ func TestBudgetConfigAPI(t *testing.T) {
 	}
 }
 
+// TestStreamErrorEvent 流中途断掉时，网关应补发客户端可识别的错误终止事件
+// （OpenAI 协议含 "upstream stream interrupted" 与 [DONE]），与正常截断可区分。
+func TestStreamErrorEvent(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		f := w.(http.Flusher)
+		io.WriteString(w, `data: {"choices":[{"delta":{"content":"a"}}]}`+"\n\n")
+		f.Flush()
+		conn, _, _ := w.(http.Hijacker).Hijack() // 原始断开：模拟上游中途挂掉
+		conn.Close()
+		<-r.Context().Done()
+	}))
+	defer up.Close()
+
+	srv, st := newTestServer(t)
+	mustCreateChannel(t, st, "openai", up.URL+"/v1", nil, 0)
+	key := mustCreateKey(t, st)
+	rec := do(srv, "POST", "/v1/chat/completions", `{"model":"m","stream":true,"messages":[]}`,
+		map[string]string{"Authorization": "Bearer " + key})
+	if !strings.Contains(rec.Body.String(), "upstream stream interrupted") {
+		t.Fatalf("mid-stream error event missing: %q", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "data: [DONE]") {
+		t.Fatalf("terminal [DONE] missing: %q", rec.Body.String())
+	}
+}
+
+// TestKeyCooldownPersistence 冷却状态跨重启：进冷却落快照，新实例恢复未到期
+// 的冷却；恢复后成功即复位并清掉快照。
+func TestKeyCooldownPersistence(t *testing.T) {
+	st := newTestStoreOnly(t)
+	m := newKeyHealthManager(st, nil)
+	m.reportFailure(1, 2, "") // 未达阈值：不进冷却、不落快照
+	if v, _ := st.GetSetting("key_cooldowns"); v != "" {
+		t.Fatalf("below threshold should not persist, got %q", v)
+	}
+	m.reportFailure(1, 2, "")
+	m.reportFailure(1, 2, "") // 第 3 次：进入冷却并落快照
+	v, err := st.GetSetting("key_cooldowns")
+	if err != nil || !strings.Contains(v, `"1/2"`) {
+		t.Fatalf("cooldown snapshot missing: %v %q", err, v)
+	}
+
+	// 模拟重启：新实例从快照恢复，该密钥应仍处冷却（available 归入冷却组）
+	m2 := newKeyHealthManager(st, nil)
+	m2.restore(st)
+	if n := m2.coolingCount(); n != 1 {
+		t.Fatalf("restored cooling count = %d, want 1", n)
+	}
+
+	// 恢复后成功：复位并清理快照
+	m2.reportSuccess(1, 2)
+	if v, _ := st.GetSetting("key_cooldowns"); v != "" && strings.Contains(v, `"1/2"`) {
+		t.Fatalf("snapshot should be cleared after success: %q", v)
+	}
+	if n := m2.coolingCount(); n != 0 {
+		t.Fatalf("cooling after success = %d, want 0", n)
+	}
+}
+
 // TestLogsKeyIndex 按密钥过滤应命中专用索引（随用量增长的前置防线）。
 func TestLogsKeyIndex(t *testing.T) {
 	st := newTestStoreOnly(t)

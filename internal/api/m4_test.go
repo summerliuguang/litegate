@@ -61,7 +61,7 @@ func TestMultiKeyRotationOn401(t *testing.T) {
 }
 
 func TestKeyHealthCooldownSkipsFailedKey(t *testing.T) {
-	m := newKeyHealthManager(nil)
+	m := newKeyHealthManager(nil, nil)
 	c := &store.Channel{ID: 7, APIKeys: []store.ChannelKey{
 		{ID: 1, Key: "a", Enabled: true},
 		{ID: 2, Key: "b", Enabled: true},
