@@ -9,7 +9,10 @@
 <link rel="stylesheet" href="/static/skin.css">
 <link rel="stylesheet" href="/static/admin.css">
 <style>
-  #chatLog{height:50vh;overflow-y:auto;background:var(--card,#fff);border:1px solid var(--line,#e8eaf0);
+  /* 全高应用布局:消息区占满剩余空间,输入框贴住视口底部 */
+  body[data-page="playground"]{display:flex;flex-direction:column;height:100dvh;overflow:hidden}
+  body[data-page="playground"] .wrap{display:flex;flex-direction:column;flex:1;min-height:0;padding-bottom:1.5rem}
+  #chatLog{flex:1;min-height:14rem;overflow-y:auto;background:var(--card,#fff);border:1px solid var(--line,#e8eaf0);
     border-radius:16px;padding:.9rem;display:flex;flex-direction:column;gap:.7rem}
   .msg{max-width:82%;min-width:0;padding:.55rem .8rem;border-radius:14px;font-size:.85rem;white-space:pre-wrap;
     overflow-wrap:anywhere;line-height:1.55}
@@ -115,7 +118,11 @@
   .cmp-side .cmp-head b{color:var(--text,#1f2430)}
   @media (max-width:768px){ .cmp-grid{grid-template-columns:1fr} }
   @media (max-width:768px){
-    #chatLog{height:44vh}
+    /* 手机:标题说明交给顶栏,聊天区几乎全屏,输入框贴底 */
+    body[data-page="playground"] .wrap{padding:3.7rem .75rem .7rem}
+    body[data-page="playground"] .wrap>h1,
+    body[data-page="playground"] .wrap>p{display:none}
+    #chatLog{min-height:0}
     .msg{max-width:92%}
     .composer{padding:.55rem .6rem .45rem}
   }

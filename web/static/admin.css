@@ -1,23 +1,42 @@
-/* LiteGate 管理台布局层(组件视觉在 skin.css,加载顺序:bulma → skin → admin) */
+/* LiteGate 管理台布局层(组件视觉在 skin.css,加载顺序:bulma → skin → admin)
+   v2 2026-09:侧栏品牌区加蓝色 monogram 标、内容区加宽、留白放大 */
 
 /* 桌面固定左侧栏 */
-.side{position:fixed;left:0;top:0;bottom:0;width:212px;background:var(--card,#fff);border-right:1px solid var(--line,#e8eaf0);padding:1.1rem .9rem;overflow-y:auto;z-index:10}
-.logo{font-weight:700;font-size:1.02rem;margin-bottom:1.1rem;color:var(--text,#1f2430);letter-spacing:.02em}
-.side .menu-label{font-size:.68rem;letter-spacing:.08em;color:var(--muted,#a0a0b8);margin-bottom:.3rem}
-.foot{margin-top:1.2rem;font-size:.68rem;color:var(--muted,#a0a0b8);line-height:1.6}
+.side{position:fixed;left:0;top:0;bottom:0;width:224px;background:var(--card,#fff);
+  border-right:1px solid var(--line,#e7eaf0);padding:1.15rem .8rem;overflow-y:auto;z-index:10}
+.logo{display:flex;align-items:center;gap:.55rem;font-weight:700;font-size:1rem;
+  margin:0 .35rem 1.3rem;color:var(--text,#181c26);letter-spacing:-.01em}
+/* 品牌标记:主色圆角方块 monogram(参照智谱控制台的左上角品牌区,纯 CSS 无图片) */
+.logo::before{content:'L';display:inline-flex;align-items:center;justify-content:center;
+  width:24px;height:24px;border-radius:7px;background:var(--primary,#3a6ff2);color:#fff;
+  font-size:.8rem;font-weight:800;flex:none}
+.side .menu-label{margin:.95rem .5rem .35rem}
+.foot{margin-top:1.4rem;font-size:.68rem;color:var(--muted,#a0a0b8);line-height:1.6;padding:0 .5rem}
+
+/* 外观分段按钮:选中态深色底(DeepSeek 的黑色按钮点缀) */
+.theme-seg{display:flex;gap:.3rem;margin-top:.3rem}
+.theme-seg button{flex:1;border:1px solid var(--line,#e7eaf0);background:var(--card,#fff);
+  color:var(--text,#181c26);border-radius:8px;padding:.35rem 0;font-size:.78rem;cursor:pointer;
+  transition:background-color .18s ease,color .18s ease,border-color .18s ease}
+.theme-seg button:hover{border-color:#c9d1dd}
+.theme-seg button.on{background:var(--text,#181c26);border-color:var(--text,#181c26);color:#fff}
 
 /* 手机端固定顶栏 + 抽屉菜单：顶栏左侧汉堡图标、右侧当前页面名；
    点图标菜单从左向右滑出悬浮在页面上，右侧留出一截原页面（半透明遮罩点击关闭） */
 .topbar{display:none;position:fixed;top:0;left:0;right:0;z-index:60;height:3rem;
   align-items:center;justify-content:space-between;padding:0 .55rem;
-  background:var(--card,#fff);border-bottom:1px solid var(--line,#e8eaf0);
+  background:var(--card,#fff);border-bottom:1px solid var(--line,#e7eaf0);
   box-shadow:0 2px 8px rgba(30,35,60,.06)}
-.topbar-title{font-weight:600;font-size:.95rem;color:var(--text,#1f2430)}
+.topbar-title{font-weight:600;font-size:.95rem;color:var(--text,#181c26)}
 .topbar-left{display:flex;align-items:center;gap:.5rem}
-.topbar-brand{font-weight:700;font-size:1rem;color:var(--text,#1f2430);letter-spacing:.02em}
+.topbar-brand{display:flex;align-items:center;gap:.45rem;font-weight:700;font-size:.98rem;
+  color:var(--text,#181c26);letter-spacing:-.01em}
+.topbar-brand::before{content:'L';display:inline-flex;align-items:center;justify-content:center;
+  width:20px;height:20px;border-radius:6px;background:var(--primary,#3a6ff2);color:#fff;
+  font-size:.7rem;font-weight:800}
 .topbar-icon{display:flex;align-items:center;border:none;background:none;cursor:pointer;
-  color:#3e7bfa;padding:.4rem;border-radius:9px}
-.topbar-icon:hover{background:#eef3ff}
+  color:var(--primary,#3a6ff2);padding:.4rem;border-radius:9px}
+.topbar-icon:hover{background:var(--primary-weak,#eef3ff)}
 .mnav-backdrop{display:none;position:fixed;inset:0;z-index:70;background:rgba(24,28,45,.42);
   opacity:0;pointer-events:none;transition:opacity .22s ease}
 .mnav-drawer{display:none;position:fixed;top:0;bottom:0;left:0;z-index:80;width:min(76%,290px);
@@ -25,7 +44,10 @@
   box-shadow:8px 0 28px rgba(25,30,55,.18);padding:.9rem .8rem 1.2rem;
   transform:translateX(-102%);transition:transform .24s ease}
 .mnav-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem}
-.mnav-logo{font-weight:700;font-size:1.02rem;color:var(--text,#1f2430);letter-spacing:.02em}
+.mnav-logo{display:flex;align-items:center;gap:.45rem;font-weight:700;font-size:1rem;color:var(--text,#181c26)}
+.mnav-logo::before{content:'L';display:inline-flex;align-items:center;justify-content:center;
+  width:22px;height:22px;border-radius:7px;background:var(--primary,#3a6ff2);color:#fff;
+  font-size:.75rem;font-weight:800}
 .mnav-close{border:none;background:none;cursor:pointer;color:#8a8aa0;padding:.2rem .45rem;font-size:1.45rem;line-height:1}
 .mnav-close:hover{color:#4a4a68}
 /* Bulma 弹窗默认 z-index 40,低于顶栏的 60,手机端弹窗顶部会被顶栏盖住,提到顶栏之上 */
@@ -34,18 +56,14 @@
 .modal-background{backdrop-filter:blur(3px)}
 
 /* 药丸形小按钮(对话测试/日志钻取的返回、加载更多、系统提示等) */
-.chip-btn{border:1px solid var(--line,#e8eaf0);background:var(--card,#fff);color:var(--text,#1f2430);
+.chip-btn{border:1px solid var(--line,#e7eaf0);background:var(--card,#fff);color:var(--text,#181c26);
   border-radius:999px;padding:.25rem .75rem;font-size:.78rem;cursor:pointer;
   transition:background-color .18s ease,border-color .18s ease}
-.chip-btn:hover{border-color:#c9cfdd;background:var(--primary-weak,#eef3ff)}
-.chip-btn.on{background:var(--primary-weak,#eef3ff);border-color:var(--primary,#3e7bfa);color:var(--primary,#3e7bfa)}
+.chip-btn:hover{border-color:#c9d1dd;background:var(--primary-weak,#eef3ff)}
+.chip-btn.on{background:var(--primary-weak,#eef3ff);border-color:var(--primary,#3a6ff2);color:var(--primary,#3a6ff2)}
 .topbar .theme-quick{border:none;background:none;cursor:pointer;font-size:1.05rem;
-  padding:.3rem .45rem;border-radius:9px;color:var(--text,#1f2430)}
-.theme-seg{display:flex;gap:.3rem;margin-top:.3rem}
-.theme-seg button{flex:1;border:1px solid var(--line,#e8eaf0);background:var(--card,#fff);
-  color:var(--text,#1f2430);border-radius:9px;padding:.35rem 0;font-size:.78rem;cursor:pointer;
-  transition:background-color .18s ease,color .18s ease}
-.theme-seg button.on{background:var(--primary,#3e7bfa);border-color:var(--primary,#3e7bfa);color:#fff}
+  padding:.3rem .45rem;border-radius:9px;color:var(--text,#181c26)}
+
 @media(max-width:899px){
   .side{display:none}
   .topbar{display:flex}
@@ -57,23 +75,31 @@
   body.mnav-open .mnav-drawer{transform:none}
 }
 
-/* 内容区 */
-.wrap{max-width:960px;margin-left:236px;padding:1.2rem 1rem 3rem}
-.stat-num{font-size:1.7rem;font-weight:700}
+/* 内容区:宽屏自适应到 1600px,留白放大 */
+.wrap{margin-left:252px;padding:1.75rem 2rem 3.5rem}
 .table td,.table th{vertical-align:middle}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.85rem}
 .errbox{white-space:pre-wrap;word-break:break-all}
 
-/* 仪表盘近 7 天条形图 */
-.bar-row{display:flex;align-items:center;gap:.5rem;margin-bottom:.45rem}
-.bar-day{width:5.2rem;font-size:.78rem;color:var(--muted,#666);flex:none}
-.bar-track{flex:1;background:var(--line,#eef0f6);border-radius:999px;height:14px;overflow:hidden}
-.bar-fill{height:100%;background:var(--primary,#3e7bfa);border-radius:999px;min-width:2px;transition:width .3s ease}
-.bar-val{width:6.5rem;font-size:.75rem;color:var(--muted,#666);text-align:right;flex:none}
+/* 模型价格:免费模型列表卡,一行一条 */
+.free-row{display:flex;justify-content:space-between;align-items:center;gap:.8rem;
+  padding:.42rem 0;border-bottom:1px solid var(--line-2,#eef0f4);font-size:.82rem}
+.free-row:last-child{border-bottom:none}
+
+/* 仪表盘近 7 天条形图:细轨道(10px)更接近控制台图表 */
+.bar-row{display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem}
+.bar-day{width:5.2rem;font-size:.78rem;color:var(--muted,#8a90a0);flex:none}
+.bar-track{flex:1;background:var(--line-2,#eef0f4);border-radius:999px;height:10px;overflow:hidden}
+.bar-fill{height:100%;background:var(--primary,#3a6ff2);border-radius:999px;min-width:2px;transition:width .3s ease}
+.bar-val{width:7rem;font-size:.75rem;color:var(--muted,#8a90a0);text-align:right;flex:none}
 
 /* 统计卡片网格（仪表盘）：桌面 4 列，移动端 2 列 */
-.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.9rem;margin-bottom:1.2rem}
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem}
 .stat-grid .card{height:100%}
+.stat-grid .card .card-content{padding:1.15rem 1.2rem}
+/* 页面主卡片区节奏:卡片之间留白统一 */
+.wrap > .card{margin-bottom:1.5rem}
+.wrap > .columns{margin-bottom:1.5rem}
 
 /* 移动端适配：统计网格两列、表格转卡片（配合 td 的 data-label）、弹窗触控 */
 @media(max-width:768px){
@@ -84,7 +110,7 @@
 
   table.mobile-cards,table.mobile-cards tbody{display:block;width:100%}
   table.mobile-cards thead{display:none}
-  table.mobile-cards tr{display:block;background:var(--card,#fff);border:1px solid var(--line,#e8eaf0);border-radius:12px;padding:.4rem .8rem;margin-bottom:.7rem}
+  table.mobile-cards tr{display:block;background:var(--card,#fff);border:1px solid var(--line,#e7eaf0);border-radius:12px;padding:.4rem .8rem;margin-bottom:.7rem}
   table.mobile-cards td{display:flex;justify-content:space-between;align-items:center;gap:.8rem;border-bottom:none;padding:.26rem 0;text-align:right;overflow-wrap:anywhere}
   table.mobile-cards td::before{content:attr(data-label);font-weight:600;font-size:.72rem;color:var(--muted,#a0a0b8);text-align:left;flex:none;white-space:nowrap}
   table.mobile-cards td[colspan]{display:block;text-align:center}
@@ -93,6 +119,14 @@
   /* 长内容竖排单元格：列名独占一行、内容左对齐（密钥/模型列表/操作按钮组等） */
   table.mobile-cards td.cell-col{display:block;text-align:left}
   table.mobile-cards td.cell-col::before{display:block;margin-bottom:.15rem}
+  /* 卡片折叠:默认只显示精简字段(cell-detail 隐藏),首卡展开逻辑见 common.js;
+     展开的整卡高亮(主色边框+内圈),卡内单元格不再各自变底色 */
+  table.mobile-cards tr.card-fold td.cell-detail{display:none}
+  table.mobile-cards tbody tr:hover td{background:transparent}
+  table.mobile-cards tr.card-foldable{cursor:pointer;
+    transition:border-color .18s ease,box-shadow .18s ease}
+  table.mobile-cards tr.card-foldable:not(.card-fold){
+    border-color:var(--primary,#3a6ff2);box-shadow:inset 0 0 0 1px var(--primary,#3a6ff2)}
   .table-container.card{background:transparent;border:none;padding:0;overflow:visible}
 
   .modal-card{width:94vw}

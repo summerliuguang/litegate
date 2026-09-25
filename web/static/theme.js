@@ -10,7 +10,7 @@
     else root.removeAttribute('data-theme');
     root.style.colorScheme = dark ? 'dark' : 'light';
     /* 样式表加载前先把画布刷成主题底色,避免夜间模式闪白(色值与皮肤 CSS 的 --bg 一致) */
-    root.style.background = dark ? '#12141c' : '#f6f7fb';
+    root.style.background = dark ? '#12141c' : '#eef1f5';
     root.dataset.themeMode = t;
   }
   window.siteTheme = {

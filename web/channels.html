@@ -138,22 +138,23 @@ function renderRows() {
     tb.innerHTML = '<tr><td colspan="9" class="has-text-grey">还没有渠道，点右上角"新建渠道"添加第一个上游</td></tr>';
     return;
   }
-  tb.innerHTML = channels.map(c => `<tr>
-      <td data-label="ID">${c.id}</td>
+  tb.innerHTML = channels.map(c => `<tr class="card-foldable card-fold">
+      <td data-label="ID" class="cell-detail">${c.id}</td>
       <td data-label="名称" class="cell-col"><b>${esc(c.name)}</b>${c.remark ? `<br><span class="has-text-grey is-size-7">${esc(c.remark)}</span>` : ''}</td>
       <td data-label="类型"><span class="tag is-light">${esc(c.type)}</span></td>
-      <td data-label="Base URL" class="mono cell-col" style="word-break:break-all">${esc(c.base_url)}</td>
-      <td data-label="模型" class="cell-col">${c.models && c.models.length ? esc(c.models.slice(0, 3).join(', ')) + (c.models.length > 3 ? ` 等 ${c.models.length} 个` : '') : '<span class="has-text-grey">任意</span>'}${c.disabled_models && c.disabled_models.length ? `<br><span class="has-text-grey is-size-7">已禁用 ${c.disabled_models.length} 个</span>` : ''}</td>
-      <td data-label="优先级">${c.priority}</td>
-      <td data-label="权重">${c.weight}</td>
+      <td data-label="Base URL" class="mono cell-col cell-detail" style="word-break:break-all">${esc(c.base_url)}</td>
+      <td data-label="模型" class="cell-col cell-detail">${c.models && c.models.length ? esc(c.models.slice(0, 3).join(', ')) + (c.models.length > 3 ? ` 等 ${c.models.length} 个` : '') : '<span class="has-text-grey">任意</span>'}${c.disabled_models && c.disabled_models.length ? `<br><span class="has-text-grey is-size-7">已禁用 ${c.disabled_models.length} 个</span>` : ''}</td>
+      <td data-label="优先级" class="cell-detail">${c.priority}</td>
+      <td data-label="权重" class="cell-detail">${c.weight}</td>
       <td data-label="状态">${c.enabled ? '<span class="status ok">启用</span>' : '<span class="status">停用</span>'}</td>
-      <td data-label="操作" class="cell-col">
+      <td data-label="操作" class="cell-col cell-detail">
         <button class="button is-small is-link is-light" onclick="testCh(${c.id})">测试</button>
         ${c.balance_api ? `<button class="button is-small" onclick="balanceCh(${c.id})">余额</button>` : ''}
         <button class="button is-small" onclick="openEdit(${c.id})">编辑</button>
         <button class="button is-small is-danger is-light" onclick="delCh(${c.id}, '${esc(c.name)}')">删除</button>
       </td>
     </tr>`).join('');
+  renderFold(tb); initCardFold(tb);
 }
 
 let modelState = new Map(); // 模型名 -> 是否启用（勾选式编辑）

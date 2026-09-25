@@ -20,7 +20,11 @@
     价格匹配先精确、再最长前缀：<code>gpt-4o</code> 覆盖 <code>gpt-4o-2024-08-06</code>。
   </p>
 
-  <form class="card" style="margin-bottom:1.2rem" id="formUp">
+  <div style="margin-bottom:1.2rem;display:flex;justify-content:flex-end">
+    <button class="button is-link is-small" id="btnNew" type="button">＋ 新建模型价格</button>
+  </div>
+
+  <form class="card" style="margin-bottom:1.2rem;display:none" id="formUp">
     <div class="card-content">
       <div class="columns is-multiline">
         <div class="column is-one-third">
@@ -57,6 +61,8 @@
       <tbody id="rows"><tr><td colspan="7" class="has-text-grey">加载中…</td></tr></tbody>
     </table>
   </div>
+
+  <div id="freeBox" style="margin-top:1.2rem"></div>
 </div>
 <script src="/static/common.js"></script>
 <script>
@@ -69,15 +75,31 @@ function delUrl(model) { return '/api/admin/prices/' + model.split('/').map(enco
 const CUR_SYMBOL = { USD: '$', CNY: '¥' };
 function curSym(c) { return CUR_SYMBOL[(c || 'USD').toUpperCase()] || (c || 'USD'); }
 
+const isFree = p => +p.input_price === 0 && +p.output_price === 0;
+
+// 新建价格表单：默认收起，点「新建模型价格」展开，保存成功后收起
+const formUp = document.getElementById('formUp');
+const btnNew = document.getElementById('btnNew');
+function setFormOpen(open) {
+  formUp.style.display = open ? '' : 'none';
+  btnNew.textContent = open ? '收起' : '＋ 新建模型价格';
+  if (open) document.getElementById('fModel').focus();
+}
+btnNew.addEventListener('click', () => setFormOpen(formUp.style.display === 'none'));
+
 async function load() {
   try {
     const prices = await api('/api/admin/prices');
     const tb = document.getElementById('rows');
+    const box = document.getElementById('freeBox');
+    const paid = prices.filter(p => !isFree(p));
+    const free = prices.filter(isFree);
     if (!prices.length) {
-      tb.innerHTML = '<tr><td colspan="7" class="has-text-grey">还没有价格配置，用上方表单添加</td></tr>';
+      tb.innerHTML = '<tr><td colspan="7" class="has-text-grey">还没有价格配置，点右上角「新建模型价格」添加</td></tr>';
+      box.innerHTML = '';
       return;
     }
-    tb.innerHTML = prices.map(p => {
+    tb.innerHTML = paid.map(p => {
       const s = curSym(p.currency);
       const hit = p.cache_read_price > 0 ? `${s}${p.cache_read_price}` : `自动（${s}${(p.input_price * 0.1).toFixed(2).replace(/\.?0+$/, '')}）`;
       const off = p.offpeak_ratio && p.offpeak_ratio < 1 ? `×${p.offpeak_ratio}` : '—';
@@ -90,7 +112,16 @@ async function load() {
       <td data-label="更新时间" class="mono">${fmtTs(p.updated_at)}</td>
       <td data-label="操作"><button class="button is-small is-danger is-light" onclick="delPrice('${esc(p.model)}')">删除</button></td>
     </tr>`;
-    }).join('');
+    }).join('') || '<tr><td colspan="7" class="has-text-grey">暂无计费模型</td></tr>';
+    // 免费模型（0/0）不值得一行表格，聚合成一张卡片，一行一条
+    box.innerHTML = free.length ? `
+      <div class="card" style="margin-top:1.2rem"><div class="card-content" style="padding:.85rem 1rem">
+        <h2 class="title is-6" style="margin:0 0 .35rem">免费模型
+          <span class="is-size-7 has-text-grey" style="font-weight:400">（${free.length} 个，不计成本）</span></h2>
+        ${free.map(p =>
+          `<div class="free-row"><span class="mono">${esc(p.model)}</span>` +
+          `<button class="button is-small is-danger is-light" onclick="delPrice('${esc(p.model)}')">删除</button></div>`).join('')}
+      </div></div>` : '';
   } catch (ex) { toast('加载失败：' + ex.message, false); }
 }
 
@@ -108,6 +139,7 @@ document.getElementById('formUp').addEventListener('submit', async e => {
   try {
     await api('/api/admin/prices', { method: 'PUT', body: JSON.stringify(body) });
     toast('已保存：' + body.model);
+    setFormOpen(false);
     load();
   } catch (ex) { toast('保存失败：' + ex.message, false); }
 });

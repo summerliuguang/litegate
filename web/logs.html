@@ -39,7 +39,12 @@
 <div class="wrap">
   <h1 class="title is-4" style="margin:0 0 1rem">请求日志</h1>
 
-  <form class="card" style="margin-bottom:1rem" id="formFilter">
+  <div style="margin-bottom:1rem;display:flex;justify-content:flex-end;align-items:center;gap:.6rem;flex-wrap:wrap">
+    <span class="is-size-7 has-text-grey" id="totalLine"></span>
+    <button class="button is-link is-small" id="btnFilter" type="button">筛选 / 查询</button>
+  </div>
+
+  <form class="card" style="margin-bottom:1rem;display:none" id="formFilter">
     <div class="card-content">
       <div class="columns is-multiline is-variable is-1">
         <div class="column is-2"><label class="label is-size-7">模型</label>
@@ -64,7 +69,6 @@
       <div class="buttons" style="margin-bottom:0">
         <button class="button is-link is-small" type="submit">查询</button>
         <button class="button is-small" type="button" id="btnReset">重置</button>
-        <span class="has-text-grey is-size-7" id="totalLine" style="align-self:center;margin-left:.5rem"></span>
       </div>
     </div>
   </form>
@@ -175,6 +179,7 @@ async function loadModels() {
           <span class="m-name">${esc(s.model)}</span>${st}
         </div>
         <div class="m-line"><span>输入</span><b>${fmtTok(s.prompt_tokens)}</b></div>
+        <div class="m-line" title="缓存命中输入 / 未命中输入（括号内为命中占输入比例）"><span>缓存</span><b>${fmtTok(s.cache_tokens)}（${s.prompt_tokens > 0 ? Math.round(100 * s.cache_tokens / s.prompt_tokens) : 0}%） · 未命中 ${fmtTok(Math.max(0, s.prompt_tokens - s.cache_tokens))}</b></div>
         <div class="m-line"><span>输出</span><b>${fmtTok(s.completion_tokens)}</b></div>
         <div class="m-line"><span>成本</span><b>${fmtCur(s.cost, s.currency || 'USD')}</b></div>
         <div class="m-line"><span>最近</span><span>${esc(last)}</span></div>
@@ -314,9 +319,20 @@ function openIdFilter(idv) {
   loadList(false);
 }
 
+// 筛选表单默认收起,点「筛选 / 查询」展开,查询提交后自动收起
+const formFilter = document.getElementById('formFilter');
+const btnFilter = document.getElementById('btnFilter');
+function setFilterOpen(open) {
+  formFilter.style.display = open ? '' : 'none';
+  btnFilter.textContent = open ? '收起筛选' : '筛选 / 查询';
+  if (open) document.getElementById('qModel').focus();
+}
+btnFilter.addEventListener('click', () => setFilterOpen(formFilter.style.display === 'none'));
+
 document.getElementById('formFilter').addEventListener('submit', e => {
   e.preventDefault();
   document.getElementById('qModel').value = ''; // 模型条件由钻取层级控制
+  setFilterOpen(false);
   const idv = document.getElementById('qId').value.trim();
   if (idv) { openIdFilter(idv); return; }
   setView('models');
@@ -339,6 +355,7 @@ async function loadRefs() {
   await loadRefs();
   const urlId = new URLSearchParams(location.search).get('id');
   if (urlId && /^\d+$/.test(urlId)) {
+    setFilterOpen(true);
     document.getElementById('qId').value = urlId;
     openIdFilter(urlId);
     return;

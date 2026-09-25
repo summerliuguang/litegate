@@ -32,6 +32,7 @@ async function api(path, opts = {}) {
 const NAV_ITEMS = [
   { id: 'dashboard',  href: '/',                 icon: '', label: '仪表盘' },
   { id: 'channels',   href: '/channels.html',    icon: '', label: '渠道管理' },
+  { id: 'balances',   href: '/balances.html',    icon: '', label: '余额监控' },
   { id: 'keys',       href: '/keys.html',        icon: '', label: '虚拟密钥' },
   { id: 'logs',       href: '/logs.html',        icon: '', label: '请求日志' },
   { id: 'prices',     href: '/prices.html',      icon: '', label: '模型价格' },
@@ -80,7 +81,12 @@ function renderNav() {
       <span class="topbar-brand">LiteGate</span>
     </div>
     <span class="topbar-left">
-      <button class="theme-quick" id="themeQuick" aria-label="切换日间夜间">🌙</button>
+      <button class="theme-quick" id="themeQuick" aria-label="切换日间夜间">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>
+        </svg>
+      </button>
       <span class="topbar-title">${esc(cur ? cur.label : (document.title.split(' - ')[0] || ''))}</span>
     </span>`;
   const backdrop = document.createElement('div');
@@ -129,7 +135,9 @@ function renderNav() {
       b.classList.toggle('on', b.dataset.t === mode));
     const dark = document.documentElement.getAttribute('data-theme') === 'dark';
     const q = document.getElementById('themeQuick');
-    if (q) q.textContent = dark ? '☀️' : '🌙';
+    if (q) q.innerHTML = dark
+      ? '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>'
+      : '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
   }
   document.querySelectorAll('[data-theme-seg] button').forEach(b =>
     b.addEventListener('click', () => window.siteTheme.set(b.dataset.t)));
@@ -208,3 +216,33 @@ async function copyText(text) {
     document.execCommand('copy'); ta.remove(); toast('已复制');
   }
 }
+
+// 手机卡片视图折叠(renderFold 设初始态:initCardFold 绑定一次交互,配合 tr.card-foldable/card-fold 与 td.cell-detail)
+// 首卡默认展开;有鼠标时悬停展开、移出列表收起;触屏时点按展开、点其它卡或页面空白收起
+window.renderFold = function (tbody) {
+  tbody = typeof tbody === 'string' ? document.querySelector(tbody) : tbody;
+  if (!tbody) return;
+  [...tbody.querySelectorAll('tr.card-foldable')]
+    .forEach((tr, i) => tr.classList.toggle('card-fold', i > 0));
+};
+window.initCardFold = function (tbody) {
+  tbody = typeof tbody === 'string' ? document.querySelector(tbody) : tbody;
+  if (!tbody || tbody.dataset.foldInit) return;
+  tbody.dataset.foldInit = '1';
+  const cards = () => [...tbody.querySelectorAll('tr.card-foldable')];
+  const collapseAll = except => cards().forEach(tr => { if (tr !== except) tr.classList.add('card-fold'); });
+  if (matchMedia('(hover: none)').matches) {
+    document.addEventListener('click', e => {
+      const tr = e.target.closest('tr.card-foldable');
+      if (!tr) { collapseAll(); return; }
+      if (tr.classList.contains('card-fold')) { collapseAll(tr); tr.classList.remove('card-fold'); }
+      else if (!e.target.closest('button,a,input,select,textarea')) tr.classList.add('card-fold');
+    });
+  } else {
+    tbody.addEventListener('mouseover', e => {
+      const tr = e.target.closest('tr.card-foldable');
+      if (tr) { collapseAll(tr); tr.classList.remove('card-fold'); }
+    });
+    tbody.addEventListener('mouseleave', () => collapseAll());
+  }
+};

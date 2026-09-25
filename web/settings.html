@@ -104,7 +104,7 @@
       <button class="button is-small" id="audExport">导出 JSON</button>
       <span id="audMsg" class="is-size-7 has-text-grey" style="align-self:center"></span>
     </div>
-    <table class="table is-fullwidth is-size-7" style="border-radius:8px">
+    <table class="table is-fullwidth is-size-7 mobile-cards" style="border-radius:8px">
       <thead><tr><th>时间</th><th>操作</th><th>详情</th><th>来源 IP</th></tr></thead>
       <tbody id="auditRows"><tr><td colspan="4" class="has-text-grey">加载中…</td></tr></tbody>
     </table>
@@ -162,10 +162,10 @@ async function loadAudit() {
       return;
     }
     tb.innerHTML = rows.map(a => `<tr>
-      <td class="mono">${fmtTs(a.ts)}</td>
-      <td><span class="tag is-light is-size-7">${esc(a.action)}</span></td>
-      <td style="word-break:break-all">${esc(a.detail)}</td>
-      <td class="mono">${esc(a.ip)}</td>
+      <td data-label="时间" class="mono">${fmtTs(a.ts)}</td>
+      <td data-label="操作"><span class="tag is-light is-size-7">${esc(a.action)}</span></td>
+      <td data-label="详情" class="cell-col" style="word-break:break-all">${esc(a.detail)}</td>
+      <td data-label="来源 IP" class="mono">${esc(a.ip)}</td>
     </tr>`).join('');
   } catch (ex) {
     document.getElementById('auditRows').innerHTML =

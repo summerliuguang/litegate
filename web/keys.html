@@ -23,7 +23,7 @@
   </p>
   <div class="table-container card">
     <table class="table is-fullwidth is-size-7 mobile-cards" style="border-radius:12px">
-      <thead><tr><th>ID</th><th>名称</th><th>密钥</th><th>模型限制</th><th>限额 / 预算 / 有效期</th><th>输出速度（7 天）</th><th>创建时间</th><th style="min-width:220px">操作</th></tr></thead>
+      <thead><tr><th>ID</th><th>名称</th><th>密钥</th><th>模型限制</th><th>限额 / 预算 / 有效期</th><th>输出速度（7 天）</th><th>创建时间</th><th style="min-width:250px">操作</th></tr></thead>
       <tbody id="rows"><tr><td colspan="8" class="has-text-grey">加载中…</td></tr></tbody>
     </table>
   </div>
@@ -195,22 +195,22 @@ async function load() {
         const color = ratio >= 1 ? 'var(--bad,#e05555)' : warn ? 'var(--warn,#e0a800)' : '';
         budBar = `<div style="margin-top:.3rem;max-width:230px">` +
           `<div class="bar-track" style="height:6px"><div class="bar-fill" style="width:${pct}%;${color ? 'background:' + color : ''}"></div></div>` +
-          `<span class="is-size-7 ${warn ? 'has-text-warning-dark' : 'has-text-grey'}" style="display:inline-block;margin-top:.1rem">${warn ? '⚠ ' : ''}${pct}% · ${esc(parts.join(' · '))} /${bp}</span></div>`;
+          `<span class="is-size-7 ${warn ? 'has-text-warning-dark' : 'has-text-grey'}" style="display:inline-block;margin-top:.1rem">${pct}% · ${esc(parts.join(' · '))} /${bp}</span></div>`;
       }
       const limText = limits.length ? esc(limits.join('，')) : '';
       const tps = k.avg_tps ? k.avg_tps.toFixed(1) + ' tok/s' : '';
       const tpsCell = tps
         ? `<span title="近 7 天成功请求 ${fmtInt(k.recent_requests)} 次的加权平均">${esc(tps)}</span>`
         : '<span class="has-text-grey">--</span>';
-      return `<tr>
-      <td data-label="ID">${k.id}</td>
+      return `<tr class="card-foldable card-fold">
+      <td data-label="ID" class="cell-detail">${k.id}</td>
       <td data-label="名称"><b>${esc(k.name)}</b></td>
       <td data-label="密钥" class="mono cell-col" data-keycell="${k.id}" data-shown="0">${esc(k.key)}</td>
-      <td data-label="模型限制" class="cell-col">${lim}</td>
-      <td data-label="限额" class="cell-col">${(limText ? limText : '')}${budBar || (limText ? '' : '<span class="has-text-grey">不限</span>')}</td>
+      <td data-label="模型限制" class="cell-col cell-detail">${lim}</td>
+      <td data-label="限额" class="cell-col cell-detail">${(limText ? limText : '')}${budBar || (limText ? '' : '<span class="has-text-grey">不限</span>')}</td>
       <td data-label="输出速度" class="mono">${tpsCell}</td>
-      <td data-label="创建时间" class="mono">${fmtTs(k.created_at)}</td>
-      <td data-label="操作" class="cell-col">
+      <td data-label="创建时间" class="mono cell-detail">${fmtTs(k.created_at)}</td>
+      <td data-label="操作" class="cell-col cell-detail">
         <button class="button is-small" onclick="toggleKey(${k.id})">显示</button>
         <button class="button is-small" onclick="copyKey(${k.id})">复制</button>
         <button class="button is-small" onclick="openTrend(${k.id}, '${esc(k.name)}')">趋势</button>
@@ -219,6 +219,7 @@ async function load() {
       </td>
     </tr>`;
     }).join('');
+    renderFold(tb); initCardFold(tb);
   } catch (ex) { toast('加载失败：' + ex.message, false); }
 }
 
@@ -420,7 +421,9 @@ function renderPrio() {
       <span class="mono is-size-7" style="flex:1;min-width:0;word-break:break-all">${esc(m)}</span>
       <button type="button" class="button is-small" data-pmove="-1" title="上移" ${i === 0 ? 'disabled' : ''}>↑</button>
       <button type="button" class="button is-small" data-pmove="1" title="下移" ${i === autoPriority.length - 1 ? 'disabled' : ''}>↓</button>
-      <button type="button" class="button is-small is-danger is-light" data-pdel="${esc(m)}" title="从优先级移除">✕</button>
+      <button type="button" class="button is-small is-danger is-light" data-pdel="${esc(m)}" title="从优先级移除" aria-label="从优先级移除">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
     </div>`).join('');
 }
 document.getElementById('prioList').addEventListener('click', e => {
