@@ -8,6 +8,7 @@
 <script src="/static/theme.js"></script>
 <link rel="stylesheet" href="/static/skin.css">
 <link rel="stylesheet" href="/static/admin.css">
+<link rel="stylesheet" href="/static/vendor/uplot.min.css">
 </head>
 <body data-page="dashboard">
 <div class="wrap">
@@ -30,7 +31,7 @@
   <!-- 预算预警：有密钥当前窗口用量达到预算 80% 时显示 -->
   <div class="card" id="budgetWarn" style="display:none;margin-bottom:1.2rem;border-left:4px solid var(--warn,#e0a800)">
     <div class="card-content" style="padding:.8rem 1rem">
-      <p class="is-size-7" style="margin:0">⚠ <b>预算预警</b>：<span id="budgetWarnText"></span></p>
+      <p class="is-size-7" style="margin:0"><b>预算预警</b>：<span id="budgetWarnText"></span></p>
     </div>
   </div>
 
@@ -87,29 +88,50 @@
     </div>
   </div>
 
-  <div class="columns">
-    <div class="column">
-      <div class="card">
+  <div class="card" style="margin-bottom:1.5rem">
+    <div class="card-content">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.6rem">
+        <h2 class="title is-5" style="margin:0">用量趋势</h2>
+        <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+          <div style="display:flex;gap:.35rem" id="rangeGroup">
+            <button class="chip-btn" data-range="today" type="button">今天</button>
+            <button class="chip-btn" data-range="yesterday" type="button">昨天</button>
+            <button class="chip-btn on" data-range="7d" type="button">7 天</button>
+            <button class="chip-btn" data-range="30d" type="button">30 天</button>
+          </div>
+          <div style="display:flex;gap:.35rem" id="dimGroup">
+            <button class="chip-btn on" data-dim="model" type="button">按模型</button>
+            <button class="chip-btn" data-dim="channel" type="button">按渠道</button>
+            <button class="chip-btn" data-dim="key" type="button">按虚拟密钥</button>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:.35rem;margin-bottom:.4rem" id="metricGroup">
+        <button class="chip-btn on" data-metric="tokens" type="button">Token 用量</button>
+        <button class="chip-btn" data-metric="cache" type="button">缓存命中</button>
+        <button class="chip-btn" data-metric="tps" type="button">输出速度</button>
+      </div>
+      <div id="modelChart"><p class="has-text-grey is-size-7">加载中…</p></div>
+      <h2 class="title is-5" style="margin:.9rem 0 .4rem;font-size:.95rem">费用趋势（同上筛选，币种随价格表）</h2>
+      <div id="costChart"></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem">
         <div class="card-content">
           <h2 class="title is-5">近 7 天按模型 Top10</h2>
           <div class="table-container"><table class="table is-fullwidth is-size-7 mobile-cards">
-            <thead><tr><th>模型</th><th>请求</th><th>Tokens</th><th>成本</th></tr></thead>
-            <tbody id="byModel"><tr><td colspan="4" class="has-text-grey">加载中…</td></tr></tbody>
+            <thead><tr><th>模型</th><th>Tokens</th><th>速度</th><th>请求</th><th>成本</th></tr></thead>
+            <tbody id="byModel"><tr><td colspan="5" class="has-text-grey">加载中…</td></tr></tbody>
           </table></div>
-        </div>
-      </div>
-    </div>
-    <div class="column">
-      <div class="card">
+  </div>
+  <div class="card" style="margin-bottom:1.5rem">
         <div class="card-content">
           <h2 class="title is-5">近 7 天按渠道 Top10</h2>
           <div class="table-container"><table class="table is-fullwidth is-size-7 mobile-cards">
-            <thead><tr><th>渠道</th><th>请求</th><th>Tokens</th><th>成本</th></tr></thead>
-            <tbody id="byChannel"><tr><td colspan="4" class="has-text-grey">加载中…</td></tr></tbody>
+            <thead><tr><th>渠道</th><th>Tokens</th><th>速度</th><th>请求</th><th>成本</th></tr></thead>
+            <tbody id="byChannel"><tr><td colspan="5" class="has-text-grey">加载中…</td></tr></tbody>
           </table></div>
-        </div>
-      </div>
-    </div>
   </div>
 
   <div class="card" id="byAppCard" style="display:none">
@@ -122,16 +144,185 @@
     </div>
   </div>
 </div>
+<script src="/static/vendor/uplot.iife.min.js"></script>
 <script src="/static/common.js"></script>
+<style>
+  /* 列内表格过宽时容器内横向滚动,不撑破布局 */
+  .table-container{overflow-x:auto}
+  #modelChart .u-legend,#costChart .u-legend{font-size:.72rem;margin-top:.3rem}
+  .u-legend .u-value{display:none}
+  .u-legend tr{opacity:1!important}
+  /* 悬停浮窗:鼠标右侧显示各序列当日实际值,靠右自动翻到左侧 */
+  .up-tip{position:absolute;display:none;z-index:20;pointer-events:none;background:var(--card,#fff);
+    border:1px solid var(--line,#e5e9f0);border-radius:8px;padding:.45rem .6rem;font-size:.72rem;
+    color:var(--text,#181c26);box-shadow:0 4px 16px rgba(25,30,55,.14);white-space:nowrap}
+  .up-tip .t{font-weight:600;margin-bottom:.25rem;color:var(--muted,#858c9d)}
+  .up-tip .r{display:flex;align-items:center;gap:.4rem;max-width:24rem}
+  .up-tip .r b{margin-left:auto;padding-left:.9rem;font-variant-numeric:tabular-nums}
+  .up-tip .c{width:8px;height:8px;border-radius:999px;flex:none}
+</style>
 <script>
 'use strict';
 renderNav();
 
 function usageRow(u) {
-  return `<tr><td class="mono cell-col" data-label="名称">${esc(u.model || u.channel_name || '—')}</td>` +
-    `<td data-label="请求">${fmtInt(u.requests)}</td><td data-label="Tokens">${fmtTok(Number(u.prompt_tokens) + Number(u.completion_tokens))}</td>` +
+  const name = esc(u.model || u.channel_name || '—');
+  const tok = Number(u.prompt_tokens) + Number(u.completion_tokens);
+  return `<tr><td class="mono cell-col" data-label="名称">${name}</td>` +
+    `<td data-label="Tokens">${fmtTok(tok)}</td>` +
+    `<td data-label="速度">${u.tps > 0 ? u.tps.toFixed(1) + ' tok/s' : '--'}</td>` +
+    `<td data-label="请求">${fmtInt(u.requests)}</td>` +
     `<td data-label="成本">${fmtCost(u.cost_by_currency || u.cost_usd)}</td></tr>`;
 }
+
+/* ===== 趋势折线图(uPlot):范围/维度/指标可切,悬停浮窗显示实际值,费用单独一张 ===== */
+const PALETTE = ['#4d6bfe', '#0ea5e9', '#22c55e', '#f59e0b', '#e5484d', '#9333ea', '#0d9488', '#d946ef', '#8a90a0'];
+let trendRange = '7d', trendDim = 'model', trendMetric = 'tokens';
+let trendData = null, usageChart = null, costChart = null;
+
+function chartTheme() {
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+  return { grid: dark ? '#2a2e3c' : '#e7eaf0', axis: dark ? '#8f96ab' : '#858c9d' };
+}
+
+// 悬停浮窗:贴在鼠标右侧,靠右缘时翻到左侧
+function tipPlugin() {
+  let tip;
+  return { hooks: {
+    init(u) { tip = document.createElement('div'); tip.className = 'up-tip'; u.over.appendChild(tip); },
+    setCursor(u) {
+      const i = u.cursor.idx;
+      if (i == null) { tip.style.display = 'none'; return; }
+      tip.style.display = 'block';
+      const rows = [];
+      for (let s = 1; s < u.series.length; s++) {
+        const v = u.data[s][i];
+        if (v == null) continue;
+        rows.push(`<div class="r"><span class="c" style="background:${u.series[s].stroke}"></span>` +
+          `${esc(u.series[s].label)} <b>${u.series[s].value(u, v)}</b></div>`);
+      }
+      tip.innerHTML = `<div class="t">${u.series[0].value(u, u.data[0][i])}</div>` + rows.join('');
+      const left = u.cursor.left + 12;
+      tip.style.left = (left + tip.offsetWidth > u.over.clientWidth - 4)
+        ? (u.cursor.left - tip.offsetWidth - 12) + 'px' : left + 'px';
+      tip.style.top = Math.max(2, u.cursor.top - tip.offsetHeight / 2) + 'px';
+    },
+  } };
+}
+
+function trendXY(metric) {
+  const series = (trendData && trendData.series) || [];
+  const bucketSet = new Set();
+  series.forEach(sr => sr.points.forEach(p => bucketSet.add(p.t)));
+  const buckets = [...bucketSet].sort();
+  const total = p => metric === 'cache' ? p.cache : metric === 'cost' ? p.cost : p.tokens;
+  const totals = {};
+  series.forEach(sr => sr.points.forEach(p => totals[sr.name] = (totals[sr.name] || 0) + total(p)));
+  const names = Object.keys(totals).filter(n => n !== '其他')
+    .sort((a, b) => totals[b] - totals[a]).concat(series.some(sr => sr.name === '其他') ? ['其他'] : []);
+  const idx = new Map(buckets.map((b, i) => [b, i]));
+  const xs = buckets.map(b => new Date(b.replace(' ', 'T')).getTime() / 1000);
+  const vals = names.map(n => {
+    const arr = new Array(buckets.length).fill(null);
+    const sr = series.find(x => x.name === n);
+    if (sr) sr.points.forEach(p => { arr[idx.get(p.t)] = total(p); });
+    return arr;
+  });
+  const cur = {};
+  series.forEach(sr => { cur[sr.name] = sr.currency || ''; });
+  return { xs, names, vals, cur };
+}
+
+function fmtTick(metric) {
+  if (metric === 'tps') return v => (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + ' tok/s';
+  if (metric === 'cost') return v => v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toFixed(4);
+  return v => fmtTok(v);
+}
+
+function makeChart(el, metric, height) {
+  const th = chartTheme();
+  const { xs, names, vals, cur } = trendXY(metric);
+  const CUR = { USD: '$', CNY: '¥' };
+  if (!xs.length) { el.innerHTML = '<p class="has-text-grey is-size-7">暂无数据</p>'; return null; }
+  const fmt = fmtTick(metric);
+  const p2 = n => String(n).padStart(2, '0');
+  // x 轴域铺满所选周期(数据稀疏时没有点的地方也保留时间轴)
+  const nowD = new Date();
+  const startToday = new Date(nowD.getFullYear(), nowD.getMonth(), nowD.getDate());
+  let domMin = new Date(startToday);
+  if (trendRange === 'yesterday') domMin.setDate(domMin.getDate() - 1);
+  else if (trendRange === '7d') domMin.setDate(domMin.getDate() - 6);
+  else if (trendRange === '30d') domMin.setDate(domMin.getDate() - 29);
+  let domMax = (trendRange === 'yesterday') ? startToday : nowD;
+  const opts = {
+    width: el.clientWidth || 600, height,
+    scales: { x: { time: true, range: () => [domMin.getTime() / 1000, domMax.getTime() / 1000] } },
+    plugins: [tipPlugin()],
+    axes: [
+      { stroke: th.axis, grid: { stroke: th.grid }, values: (u, ticks) => {
+          let last = '';
+          return ticks.map(ts => {
+            const d = new Date(ts * 1000);
+            const lb = trendData.bucket === 'hour'
+              ? p2(d.getHours()) + ':00'
+              : (d.getMonth() + 1) + '-' + String(d.getDate()).padStart(2, '0');
+            if (lb === last) return ''; // 同一天多个刻度只标一次
+            last = lb;
+            return lb;
+          });
+        } },
+      { stroke: th.axis, grid: { stroke: th.grid }, values: (u, ticks) => ticks.map(v => fmt(v)) },
+    ],
+    series: [{ label: '时间', value: (u, ts) => {
+        if (ts == null) return '--';
+        const d = new Date(ts * 1000);
+        const day = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+        return trendData.bucket === 'hour' ? `${day} ${p2(d.getHours())}:00` : day;
+      } }].concat(names.map((n, i) => {
+        const sym = metric === 'cost' ? (CUR[cur[n]] || '') : '';
+        const sv = v => sym + fmt(v);
+        return {
+          label: n, stroke: PALETTE[i % PALETTE.length], width: 2, spanGaps: true,
+          points: { show: xs.length < 12 },
+          value: (u, v) => v == null ? '--' : sv(v),
+        };
+      })),
+    legend: { live: false },
+  };
+  return new uPlot(opts, [xs].concat(vals), el);
+}
+
+function renderTrend() {
+  const b1 = document.getElementById('modelChart'), b2 = document.getElementById('costChart');
+  if (usageChart) { usageChart.destroy(); usageChart = null; }
+  if (costChart) { costChart.destroy(); costChart = null; }
+  b1.innerHTML = ''; b2.innerHTML = '';
+  usageChart = makeChart(b1, trendMetric, 260);
+  costChart = makeChart(b2, 'cost', 200);
+}
+
+async function loadTrend() {
+  try {
+    trendData = await api(`/api/admin/trend?dim=${trendDim}&range=${trendRange}`);
+    renderTrend();
+  } catch (ex) { toast('趋势加载失败：' + ex.message, false); }
+}
+
+function bindChips(id, attr, cb) {
+  document.getElementById(id).addEventListener('click', e => {
+    const b = e.target.closest('button[data-' + attr + ']');
+    if (!b) return;
+    [...b.parentElement.children].forEach(x => x.classList.toggle('on', x === b));
+    cb(b.dataset[attr]);
+  });
+}
+bindChips('rangeGroup', 'range', v => { trendRange = v; loadTrend(); });
+bindChips('dimGroup', 'dim', v => { trendDim = v; loadTrend(); });
+bindChips('metricGroup', 'metric', v => { trendMetric = v; renderTrend(); });
+document.addEventListener('themechange', () => { if (trendData) renderTrend(); });
+let rsz; window.addEventListener('resize', () => {
+  clearTimeout(rsz); rsz = setTimeout(() => { if (trendData) renderTrend(); }, 200);
+});
 
 async function load() {
   try {
@@ -174,11 +365,12 @@ async function load() {
         `<span class="bar-val">${fmtInt(x.requests)} 次 · ${fmtCost(x.cost_by_currency || x.cost_usd)}</span></div>`;
     }).join('') : '<p class="has-text-grey is-size-7">暂无数据</p>';
 
+    // 趋势图不在 10 秒轮询里刷新(重建会打断悬停),只在页面加载与筛选变化时拉取
     const bm = d.by_model || [], bc = d.by_channel || [];
     document.getElementById('byModel').innerHTML = bm.length ? bm.map(usageRow).join('')
-      : '<tr><td colspan="4" class="has-text-grey">暂无数据</td></tr>';
+      : '<tr><td colspan="6" class="has-text-grey">暂无数据</td></tr>';
     document.getElementById('byChannel').innerHTML = bc.length ? bc.map(usageRow).join('')
-      : '<tr><td colspan="4" class="has-text-grey">暂无数据</td></tr>';
+      : '<tr><td colspan="6" class="has-text-grey">暂无数据</td></tr>';
 
     // 实时与延迟指标
     document.getElementById('vP50').textContent = d.latency_p50_ms ? d.latency_p50_ms + 'ms' : '--';
@@ -212,6 +404,7 @@ async function load() {
   } catch (ex) { toast('加载失败：' + ex.message, false); }
 }
 load();
+loadTrend();
 setInterval(load, 10000);
 </script>
 </body>
