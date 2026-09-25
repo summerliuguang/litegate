@@ -169,6 +169,53 @@ func (a *admin) channelBalances(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, report)
 }
 
+// channelBalance 余额监控页里单渠道的探测快照。
+type channelBalance struct {
+	ID         int64         `json:"id"`
+	Name       string        `json:"name"`
+	BalanceAPI string        `json:"balance_api"`
+	AlertBelow float64       `json:"alert_below"`
+	Report     balanceReport `json:"report"`
+}
+
+// allBalances 批量探测所有配置了余额协议的渠道（渠道间并发封顶 4，
+// 渠道内密钥沿用 probeChannelBalances 的 8），供余额监控页一次拉全。
+func (a *admin) allBalances(w http.ResponseWriter, r *http.Request) {
+	channels, err := a.st.ListChannels("")
+	if err != nil {
+		writeInternalError(w, r, err)
+		return
+	}
+	var watch []*store.Channel
+	for i := range channels {
+		if channels[i].BalanceAPI != "" {
+			watch = append(watch, &channels[i])
+		}
+	}
+	out := make([]channelBalance, 0, len(watch))
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for _, c := range watch {
+		wg.Add(1)
+		go func(c *store.Channel) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			rep := a.proxyForBalance().probeChannelBalances(r.Context(), c)
+			a.proxyForBalance().maybeAlertBalance(c, rep)
+			mu.Lock()
+			out = append(out, channelBalance{
+				ID: c.ID, Name: c.Name, BalanceAPI: c.BalanceAPI,
+				AlertBelow: c.BalanceAlertBelow, Report: rep,
+			})
+			mu.Unlock()
+		}(c)
+	}
+	wg.Wait()
+	writeJSON(w, http.StatusOK, map[string]any{"channels": out, "at": time.Now()})
+}
+
 // proxyForBalance 余额探测复用数据面的 client 与缓存（进程内单实例）。
 func (a *admin) proxyForBalance() *proxy { return serverProxy }
 

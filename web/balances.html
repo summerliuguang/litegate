@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>余额监控 - LiteGate</title>
+<link rel="stylesheet" href="/static/vendor/bulma.min.css">
+<script src="/static/theme.js"></script>
+<link rel="stylesheet" href="/static/skin.css">
+<link rel="stylesheet" href="/static/admin.css">
+</head>
+<body data-page="balances">
+<div class="wrap">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:.8rem;flex-wrap:wrap;margin-bottom:.3rem">
+    <h1 class="title is-4" style="margin:0">余额监控</h1>
+    <div style="display:flex;gap:.5rem;align-items:center">
+      <div class="select is-small">
+        <select id="autoSel" aria-label="自动刷新间隔">
+          <option value="0">手动刷新</option>
+          <option value="60">每 1 分钟</option>
+          <option value="300">每 5 分钟</option>
+          <option value="900">每 15 分钟</option>
+        </select>
+      </div>
+      <button class="button is-link is-small" id="btnRefresh" type="button">刷新</button>
+    </div>
+  </div>
+  <p class="is-size-7 has-text-grey" style="margin-bottom:1rem">
+    实时查询各渠道上游官方的余额接口（当前支持 DeepSeek / OpenRouter 协议，逐把密钥显示）。
+    在渠道编辑里选择「余额查询协议」后纳入监控；余额低于渠道阈值会推送告警，并在这里标红。
+  </p>
+
+  <div id="boxes"><div class="card"><div class="card-content has-text-grey">加载中…</div></div></div>
+  <p id="unmon" class="is-size-7 has-text-grey" style="margin-top:.6rem"></p>
+</div>
+<script src="/static/common.js"></script>
+<script>
+'use strict';
+renderNav();
+
+const CUR = { USD: '$', CNY: '¥' };
+function fmtMoney(v, cur) { return (CUR[(cur || '').toUpperCase()] || cur || '') + Number(v).toFixed(2); }
+// fmtTs 只认数据库时间格式，这里的是上游接口返回的 ISO 串，单独格式化
+function fmtTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+let timer = null;
+function setupAuto() {
+  const sel = document.getElementById('autoSel');
+  const saved = parseInt(localStorage.getItem('lg_bal_auto') || '300', 10);
+  sel.value = String(saved);
+  const apply = () => {
+    const sec = parseInt(sel.value, 10);
+    localStorage.setItem('lg_bal_auto', sel.value);
+    if (timer) { clearInterval(timer); timer = null; }
+    if (sec > 0) timer = setInterval(load, sec * 1000);
+  };
+  sel.addEventListener('change', apply);
+  apply();
+}
+
+async function load() {
+  const btn = document.getElementById('btnRefresh');
+  btn.classList.add('is-loading');
+  try {
+    const data = await api('/api/admin/balances', { method: 'POST' });
+    render(data.channels || []);
+    // 未纳入监控的渠道提示（拿到渠道名单即可，无需探测）
+    try {
+      const chans = await api('/api/admin/channels');
+      const names = (chans || []).filter(c => !c.balance_api).map(c => c.name);
+      document.getElementById('unmon').textContent = names.length
+        ? '未纳入监控的渠道：' + names.join('、') + '（在渠道编辑里选择余额查询协议后加入）' : '';
+    } catch (_) { /* 名单失败不影响余额展示 */ }
+  } catch (ex) { toast('加载失败：' + ex.message, false); }
+  btn.classList.remove('is-loading');
+}
+
+function render(channels) {
+  const boxes = document.getElementById('boxes');
+  if (!channels.length) {
+    boxes.innerHTML = '<div class="card"><div class="card-content has-text-grey">还没有可监控的渠道：在渠道管理里编辑渠道，选择「余额查询协议」后即可在这里查看各密钥余额。</div></div>';
+    return;
+  }
+  boxes.innerHTML = channels.map(ch => {
+    const rows = ch.report.keys.map(k => {
+      const low = ch.alert_below > 0 && !k.error && k.remaining < ch.alert_below;
+      const state = k.error
+        ? `<span class="status bad">${esc(k.error)}</span>`
+        : low
+          ? `<span class="status bad">低于阈值 ${ch.alert_below}</span>`
+          : '<span class="status ok">正常</span>';
+      return `<tr>
+        <td class="mono">${esc(k.masked)}</td>
+        <td class="mono ${low ? 'has-text-danger' : ''}" style="text-align:right"><b>${k.error ? '--' : esc(fmtMoney(k.remaining, k.currency))}</b></td>
+        <td style="text-align:right">${state}</td>
+      </tr>`;
+    }).join('');
+    const totals = {};
+    ch.report.keys.forEach(k => { if (!k.error) totals[k.currency] = (totals[k.currency] || 0) + k.remaining; });
+    const totalStr = Object.entries(totals).map(([c, v]) => fmtMoney(v, c)).join('  +  ');
+    return `<div class="card" style="margin-bottom:1.2rem"><div class="card-content" style="padding:1rem 1.1rem">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:.8rem;flex-wrap:wrap;margin-bottom:.4rem">
+        <h2 class="title is-6" style="margin:0">${esc(ch.name)}
+          <span class="tag is-light" style="margin-left:.4rem">${esc(ch.balance_api)}</span></h2>
+        <span class="is-size-7 has-text-grey">${totalStr ? '合计 <b class="mono">' + esc(totalStr) + '</b> · ' : ''}${fmtTime(ch.report.at)}</span>
+      </div>
+      ${ch.report.error ? `<p class="is-size-7 has-text-danger">${esc(ch.report.error)}</p>` : ''}
+      <table class="table is-fullwidth is-size-7" style="border-radius:10px">
+        <thead><tr><th>密钥</th><th style="text-align:right">剩余</th><th style="text-align:right">状态</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div></div>`;
+  }).join('');
+}
+
+document.getElementById('btnRefresh').addEventListener('click', load);
+setupAuto();
+load();
+</script>
+</body>
+</html>

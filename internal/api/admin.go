@@ -62,6 +62,7 @@ func (a *admin) register(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/admin/channels/{id}", a.auth(a.deleteChannel))
 	mux.Handle("POST /api/admin/channels/{id}/test", a.auth(a.testChannel))
 	mux.Handle("POST /api/admin/channels/{id}/balance", a.auth(a.channelBalances))
+	mux.Handle("POST /api/admin/balances", a.auth(a.allBalances))
 	mux.Handle("GET /api/admin/alerts", a.authRO(a.getAlerts))
 	mux.Handle("PUT /api/admin/alerts", a.auth(a.putAlerts))
 	mux.Handle("POST /api/admin/alerts/test", a.auth(a.testAlert))
@@ -69,6 +70,7 @@ func (a *admin) register(mux *http.ServeMux) {
 	mux.Handle("POST /api/admin/channels/{id}/keys/{key_id}/disable", a.auth(a.disableChannelKey))
 	mux.Handle("POST /api/admin/channels/{id}/models/disable/{model...}", a.auth(a.disableChannelModel))
 	mux.Handle("POST /api/admin/channels/{id}/models/enable/{model...}", a.auth(a.enableChannelModel))
+	mux.Handle("GET /api/admin/trend", a.authRO(a.usageTrend))
 	mux.Handle("GET /api/admin/audit", a.authRO(a.listAudit))
 	mux.Handle("GET /api/admin/audit/export", a.authRO(a.exportAudit))
 	mux.Handle("GET /api/admin/audit-config", a.authRO(a.getAuditCfg))
@@ -393,6 +395,31 @@ func maskChannel(c *store.Channel) channelOut {
 		Remark: c.Remark, CreatedAt: c.CreatedAt,
 		BalanceAPI: c.BalanceAPI, BalanceAlertBelow: c.BalanceAlertBelow,
 	}
+}
+
+// usageTrend 趋势折线图数据源:按对象维度（模型/渠道/虚拟密钥）与时间范围
+// 聚合 token/缓存/费用/速度,桶为本地时区的天（7/30 天）或小时（今天/昨天）。
+func (a *admin) usageTrend(w http.ResponseWriter, r *http.Request) {
+	dim := r.URL.Query().Get("dim")
+	if dim != "model" && dim != "channel" && dim != "key" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "dim must be model, channel or key"})
+		return
+	}
+	rng := r.URL.Query().Get("range")
+	switch rng {
+	case "today", "yesterday", "7d", "30d":
+	default:
+		rng = "7d"
+	}
+	bucket, series, err := a.st.UsageTrend(dim, rng)
+	if err != nil {
+		writeInternalError(w, r, err)
+		return
+	}
+	if series == nil {
+		series = []store.TrendSeries{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"bucket": bucket, "series": series})
 }
 
 func (a *admin) listChannels(w http.ResponseWriter, _ *http.Request) {
