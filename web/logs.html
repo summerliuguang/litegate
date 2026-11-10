@@ -169,7 +169,6 @@ async function loadModels() {
       return;
     }
     grid.innerHTML = items.map(s => {
-      const cur = s.currency === 'CNY' ? '¥' : '$';
       const st = s.errors > 0
         ? `<span class="status bad">${s.errors} 失败</span>`
         : `<span class="status ok">${s.requests} 次</span>`;
@@ -181,7 +180,7 @@ async function loadModels() {
         <div class="m-line"><span>输入</span><b>${fmtTok(s.prompt_tokens)}</b></div>
         <div class="m-line" title="缓存命中输入 / 未命中输入（括号内为命中占输入比例）"><span>缓存</span><b>${fmtTok(s.cache_tokens)}（${s.prompt_tokens > 0 ? Math.round(100 * s.cache_tokens / s.prompt_tokens) : 0}%） · 未命中 ${fmtTok(Math.max(0, s.prompt_tokens - s.cache_tokens))}</b></div>
         <div class="m-line"><span>输出</span><b>${fmtTok(s.completion_tokens)}</b></div>
-        <div class="m-line"><span>成本</span><b>${fmtCur(s.cost, s.currency || 'USD')}</b></div>
+        <div class="m-line"><span>成本</span><b>${esc(s.cost_by_currency ? fmtCost(s.cost_by_currency) : fmtCur(s.cost, s.currency || 'USD'))}</b></div>
         <div class="m-line"><span>最近</span><span>${esc(last)}</span></div>
       </div>`;
     }).join('');
@@ -215,6 +214,7 @@ async function loadList(append) {
       model: curModel, limit: PAGE, offset: listOffset,
     }));
     const items = page.items || [];
+    if (!append) list.innerHTML = '';
     if (!items.length && !append) {
       list.innerHTML = '<div class="has-text-grey is-size-7">该模型在当前条件下无记录</div>';
     }

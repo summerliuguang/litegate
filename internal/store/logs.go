@@ -148,6 +148,9 @@ type LogSummary struct {
 	Cost             float64 `json:"cost"`
 	Currency         string  `json:"currency,omitempty"`
 	LastTs           string  `json:"last_ts"`
+	// CostByCurrency is populated by the API after resolving legacy currencies.
+	// Cost and Currency remain available for single-currency summaries.
+	CostByCurrency map[string]float64 `json:"cost_by_currency,omitempty"`
 }
 
 // LogSummaries 按现有过滤条件聚合每个模型的请求摘要(不含未记录模型名的失败请求)。

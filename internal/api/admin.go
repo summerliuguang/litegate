@@ -1090,15 +1090,52 @@ func (a *admin) listLogSummaries(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	var prices []store.ModelPrice
-	if prices, err = a.st.ListModelPrices(); err == nil {
-		for i := range items {
-			if p := store.MatchPrice(prices, items[i].Model); p != nil && items[i].Currency == "" {
-				items[i].Currency = p.Currency
+	prices, err := a.st.ListModelPrices()
+	if err != nil {
+		writeInternalError(w, r, err)
+		return
+	}
+	// SQL keeps currency snapshots separate. Resolve legacy rows before combining
+	// them into one complete model card, matching the model-only detail filter.
+	summaries := make([]store.LogSummary, 0, len(items))
+	byModel := make(map[string]int, len(items))
+	for _, item := range items {
+		currency := item.Currency
+		if currency == "" {
+			if price := store.MatchPrice(prices, item.Model); price != nil {
+				currency = price.Currency
+			}
+		}
+		if currency == "" {
+			currency = "USD"
+		}
+		i, exists := byModel[item.Model]
+		if !exists {
+			i = len(summaries)
+			byModel[item.Model] = i
+			summaries = append(summaries, store.LogSummary{Model: item.Model, LastTs: item.LastTs, CostByCurrency: map[string]float64{}})
+		}
+		summary := &summaries[i]
+		summary.Requests += item.Requests
+		summary.Errors += item.Errors
+		summary.PromptTokens += item.PromptTokens
+		summary.CompletionTokens += item.CompletionTokens
+		summary.CacheTokens += item.CacheTokens
+		summary.CostByCurrency[currency] += item.Cost
+	}
+	// Input is ordered by latest timestamp, so first occurrence preserves both
+	// each model's last timestamp and the existing newest-model-first ordering.
+	for i := range summaries {
+		for currency, cost := range summaries[i].CostByCurrency {
+			cost = math.Round(cost*1e6) / 1e6
+			summaries[i].CostByCurrency[currency] = cost
+			if len(summaries[i].CostByCurrency) == 1 {
+				summaries[i].Currency = currency
+				summaries[i].Cost = cost
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, map[string]any{"items": summaries})
 }
 
 func (a *admin) deletePrice(w http.ResponseWriter, r *http.Request) {
