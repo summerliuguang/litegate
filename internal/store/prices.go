@@ -55,7 +55,11 @@ func (s *Store) UpsertModelPrice(p *ModelPrice) error {
 }
 
 func (s *Store) ListModelPrices() ([]ModelPrice, error) {
-	rows, err := s.DB.Query(
+	return listModelPrices(s.DB)
+}
+
+func listModelPrices(db queryer) ([]ModelPrice, error) {
+	rows, err := db.Query(
 		`SELECT model, input_price, output_price, cache_read_price, currency, offpeak_ratio, updated_at FROM model_prices ORDER BY model`)
 	if err != nil {
 		return nil, err

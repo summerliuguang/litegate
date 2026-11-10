@@ -17,6 +17,7 @@ import (
 
 type Store struct {
 	DB     *sql.DB
+	readDB *sql.DB // 统计专用只读连接，避免排队占用数据面单写连接
 	secret []byte
 	path   string // 数据库文件路径，备份目录按它推导
 
@@ -26,6 +27,10 @@ type Store struct {
 }
 
 var ErrNotFound = errors.New("record not found")
+
+// Reclaim an oversized WAL when SQLite can safely reset it; not a hard cap on
+// active transactions/readers. No blocking checkpoint on the request path.
+const maxIdleWALBytes = 16 << 20
 
 const schema = `
 CREATE TABLE IF NOT EXISTS settings (
@@ -131,11 +136,12 @@ func Open(path string, secret []byte) (*Store, error) {
 		}
 	}
 	db, err := sql.Open("sqlite", "file:"+path+
-		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)")
+		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"+
+		fmt.Sprintf("&_pragma=wal_autocheckpoint(1000)&_pragma=journal_size_limit(%d)", maxIdleWALBytes))
 	if err != nil {
 		return nil, err
 	}
-	// 单连接串行化读写，规避 SQLite 锁竞争；日志批量落库的优化留到用量统计阶段。
+	// 数据面保留单连接串行化写入，统计使用独立只读连接，利用 WAL 并行读写。
 	// synchronous=NORMAL 在 WAL 下不牺牲崩溃一致性（只可能丢最后的事务，不损坏库），
 	// 每笔请求日志一次 INSERT 的 fsync 开销显著下降。
 	db.SetMaxOpenConns(1)
@@ -147,6 +153,10 @@ func Open(path string, secret []byte) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
+	if err := migrateAnalytics(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate analytics: %w", err)
+	}
 	s := &Store{DB: db, path: path}
 	key, err := s.loadOrCreateSecret(secret)
 	if err != nil {
@@ -154,10 +164,38 @@ func Open(path string, secret []byte) (*Store, error) {
 		return nil, err
 	}
 	s.secret = key
+	// Private in-memory databases cannot be reopened on an independent connection.
+	if path != ":memory:" && path != "" {
+		reader, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(5000)&_pragma=query_only(1)")
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+		reader.SetMaxOpenConns(1)
+		if err := reader.Ping(); err != nil {
+			reader.Close()
+			db.Close()
+			return nil, fmt.Errorf("open analytics reader: %w", err)
+		}
+		s.readDB = reader
+	}
 	return s, nil
 }
 
-func (s *Store) Close() error { return s.DB.Close() }
+func (s *Store) analyticsDB() *sql.DB {
+	if s.readDB != nil {
+		return s.readDB
+	}
+	return s.DB
+}
+
+func (s *Store) Close() error {
+	var readErr error
+	if s.readDB != nil {
+		readErr = s.readDB.Close()
+	}
+	return errors.Join(readErr, s.DB.Close())
+}
 
 // migrate 为旧库补齐后加的列（SQLite 不支持 ADD COLUMN IF NOT EXISTS）。
 func migrate(db *sql.DB) error {
@@ -183,6 +221,7 @@ func migrate(db *sql.DB) error {
 		}
 	}
 	for _, m := range []struct{ table, col, ddl string }{
+		{"request_logs", "currency", `ALTER TABLE request_logs ADD COLUMN currency TEXT NOT NULL DEFAULT ''`},
 		{"request_logs", "cost", `ALTER TABLE request_logs ADD COLUMN cost REAL NOT NULL DEFAULT 0`},
 		{"request_logs", "cache_tokens", `ALTER TABLE request_logs ADD COLUMN cache_tokens INTEGER NOT NULL DEFAULT 0`},
 		{"request_logs", "ttfb_ms", `ALTER TABLE request_logs ADD COLUMN ttfb_ms INTEGER NOT NULL DEFAULT 0`},

@@ -300,8 +300,8 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-func (a *admin) dashboard(w http.ResponseWriter, _ *http.Request) {
-	d, err := a.st.Dashboard()
+func (a *admin) dashboard(w http.ResponseWriter, r *http.Request) {
+	d, err := a.st.DashboardContext(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -398,7 +398,7 @@ func maskChannel(c *store.Channel) channelOut {
 }
 
 // usageTrend 趋势折线图数据源:按对象维度（模型/渠道/虚拟密钥）与时间范围
-// 聚合 token/缓存/费用/速度,桶为本地时区的天（7/30 天）或小时（今天/昨天）。
+// 聚合 token/缓存/费用/速度,桶为 UTC 的天（7/30 天）或小时（今天/昨天）。
 func (a *admin) usageTrend(w http.ResponseWriter, r *http.Request) {
 	dim := r.URL.Query().Get("dim")
 	if dim != "model" && dim != "channel" && dim != "key" {
@@ -411,7 +411,7 @@ func (a *admin) usageTrend(w http.ResponseWriter, r *http.Request) {
 	default:
 		rng = "7d"
 	}
-	bucket, series, err := a.st.UsageTrend(dim, rng)
+	bucket, series, err := a.st.UsageTrendContext(r.Context(), dim, rng)
 	if err != nil {
 		writeInternalError(w, r, err)
 		return
@@ -1007,7 +1007,7 @@ func (a *admin) listLogs(w http.ResponseWriter, r *http.Request) {
 	// 按价格表回填每行的成本币种，前端据此显示 ¥/$ 而不是硬编码美元
 	if prices, err := a.st.ListModelPrices(); err == nil {
 		for i := range page.Items {
-			if p := store.MatchPrice(prices, page.Items[i].Model); p != nil {
+			if p := store.MatchPrice(prices, page.Items[i].Model); p != nil && page.Items[i].Currency == "" {
 				page.Items[i].Currency = p.Currency
 			}
 		}
@@ -1093,7 +1093,7 @@ func (a *admin) listLogSummaries(w http.ResponseWriter, r *http.Request) {
 	var prices []store.ModelPrice
 	if prices, err = a.st.ListModelPrices(); err == nil {
 		for i := range items {
-			if p := store.MatchPrice(prices, items[i].Model); p != nil {
+			if p := store.MatchPrice(prices, items[i].Model); p != nil && items[i].Currency == "" {
 				items[i].Currency = p.Currency
 			}
 		}

@@ -1,0 +1,1 @@
+{"seed_logs": 100000, "concurrency": 50, "dashboard": true, "requests": 18646, "duration_s": 30.073, "stream": true, "rps": 620.03, "p50_ms": 78.26, "p95_ms": 103.84, "p99_ms": 159.99, "cpu_seconds": 35.74, "peak_rss_mib": 35.74, "idle_rss_mib": 12.94, "db_mib": 56.53, "dashboard_refresh_ms": [2209.8559619998923, 2670.8728810001503, 2683.4045590001097], "dashboard_errors": []}

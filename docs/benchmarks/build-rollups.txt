@@ -1,0 +1,3 @@
+/tmp/litegate-review-linux-amd64: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=7REV6-7lDWT6tjC-qmfA/JPmat-943P1oWt2YQfYW/C8PLhcC-LkEvmDhkVf_f/h1DREy5mi7y_BlvJoD2f, BuildID[sha1]=17d2972f595784fe3dd66c35da46cb2a69c247a2, stripped
+/tmp/litegate-review-arm64: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, Go BuildID=EkrtUTtVRpkeEeypL62x/N3osTatSIUy6iygZlGLQ/tgcg-bFdk6ouzg78FSBf/MePr7K1CHzQE6Vys-H-u, BuildID[sha1]=6240b20b64ef5694b5425893d6a7908c987dde03, stripped
+AMD64 static: deep health and admin login PASS. ARM64: cross-build only.

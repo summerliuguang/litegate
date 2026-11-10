@@ -202,13 +202,9 @@ func (a *keyAdmission) budgetWindow(ak *store.APIKey) *windowUse {
 }
 
 // record 请求完成后累计 TPM 与预算用量；成本按价格表币种分列入账。
-// 未启用任何限额时零开销直接返回——key_usage_day 账本由调用方（logRequest）
-// 另行落账，与限额开关无关。
+// 日/月窗口始终同步累计，启用预算或切换周期时不会遗漏此前完成的请求。
 func (a *keyAdmission) record(ak *store.APIKey, prompt, completion int64, costUSD, costCNY float64) {
 	if ak == nil {
-		return
-	}
-	if ak.TPMLimit == 0 && ak.BudgetUSD == 0 && ak.BudgetTokens == 0 {
 		return
 	}
 	now := time.Now()
@@ -218,8 +214,10 @@ func (a *keyAdmission) record(ak *store.APIKey, prompt, completion int64, costUS
 		a.tpm[ak.ID] = append(pruneTok(a.tpm[ak.ID], now, time.Minute),
 			tokPoint{ts: now, tokens: prompt + completion})
 	}
-	if ak.BudgetUSD > 0 || ak.BudgetTokens > 0 {
-		w := a.budgetWindow(ak)
+	for _, period := range []string{"daily", "monthly"} {
+		windowKey := *ak
+		windowKey.BudgetPeriod = period
+		w := a.budgetWindow(&windowKey)
 		w.costUSD += costUSD
 		w.costCNY += costCNY
 		w.tokens += prompt + completion

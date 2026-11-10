@@ -1,0 +1,6 @@
+?   	litegate/cmd/litegate	[no test files]
+ok  	litegate/internal/api	17.357s
+?   	litegate/internal/config	[no test files]
+?   	litegate/internal/cryptoutil	[no test files]
+ok  	litegate/internal/store	3.788s
+?   	litegate/web	[no test files]

@@ -120,8 +120,7 @@ func decodeChatAudio(resp *http.Response) (*http.Response, error) {
 	if resp.StatusCode != http.StatusOK {
 		return resp, nil
 	}
-	body, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	body, err := readAudioResponse(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -198,6 +197,7 @@ func (p *proxy) serveAudioTranscriptions(w http.ResponseWriter, r *http.Request)
 		writeInternalError(w, r, err)
 		return
 	}
+	r.Header.Set("Content-Type", "application/json")
 	p.serveBody(w, r, "openai", "/chat/completions", "audio", model, chatBody, func(resp *http.Response) (*http.Response, error) {
 		return decodeChatText(resp, respFormat == "text")
 	})
@@ -210,8 +210,7 @@ func decodeChatText(resp *http.Response, wantText bool) (*http.Response, error) 
 	if resp.StatusCode != http.StatusOK {
 		return resp, nil
 	}
-	body, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	body, err := readAudioResponse(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -401,13 +400,21 @@ func (p *proxy) serveBody(w http.ResponseWriter, r *http.Request, protocol, upst
 		return
 	}
 	if transform != nil {
+		var scan jsonUsageScanner
+		converted := resp.StatusCode == http.StatusOK
+		if converted {
+			resp.Body = &observedResponseBody{Reader: io.TeeReader(resp.Body, &scan), Closer: resp.Body}
+		}
 		tr, terr := transform(resp)
 		if terr != nil {
 			resp.Body.Close()
 			log.Printf("proxy %s %s transform failed: %v", r.Method, upstreamPath, terr)
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream response transform failed"})
-			p.logRequest(ak, c, logProto, model, http.StatusBadGateway, time.Since(start), time.Since(start), tokenUsage{}, errMsg(terr), app)
+			p.logRequest(ak, c, logProto, model, http.StatusBadGateway, time.Since(start), time.Since(start), scan.usage, errMsg(terr), app)
 			return
+		}
+		if converted {
+			tr.Body = &convertedResponseBody{ReadCloser: tr.Body, usage: scan.usage}
 		}
 		resp = tr
 	}
@@ -657,9 +664,13 @@ func (p *proxy) respond(w http.ResponseWriter, ak *store.APIKey, c *store.Channe
 		}
 	} else {
 		tail := &tailBuffer{cap: maxUsageTail}
-		_, err = io.Copy(w, io.TeeReader(resp.Body, tail))
-		u, _ = usageFromJSON(tail.bytes())
+		var scan jsonUsageScanner
+		_, err = io.Copy(w, io.TeeReader(resp.Body, io.MultiWriter(tail, &scan)))
+		u = scan.usage
 		respTail = tail.bytes()
+	}
+	if body, ok := resp.Body.(*convertedResponseBody); ok {
+		u = body.usage
 	}
 	errMsg := ""
 	if err != nil {
@@ -804,6 +815,9 @@ func (p *proxy) logRequest(ak *store.APIKey, c *store.Channel, protocol, model s
 	var costUSD, costCNY float64
 	if price != nil {
 		cur = price.Currency
+		if cur == "" {
+			cur = "USD"
+		}
 		if cur == "CNY" {
 			costCNY = cost
 		} else {
@@ -815,8 +829,8 @@ func (p *proxy) logRequest(ak *store.APIKey, c *store.Channel, protocol, model s
 		Model: model, Protocol: protocol, App: app, Status: status,
 		LatencyMs: total.Milliseconds(), TtfbMs: ttfb.Milliseconds(),
 		PromptTokens: u.prompt, CompletionTokens: u.completion, CacheTokens: u.cacheRead,
-		CostUSD: cost,
-		Error:   errMsg,
+		CostUSD: cost, Currency: cur,
+		Error: errMsg,
 	}
 	if ak != nil {
 		l.APIKeyID = ak.ID
@@ -887,4 +901,27 @@ func (p *proxy) lookupPrice(model string) *store.ModelPrice {
 		}
 	}
 	return matchPrice(p.pc.prices, model)
+}
+
+// Converted audio bodies no longer contain the original JSON usage. Keep that
+// metadata internal; never trust an upstream-provided accounting header.
+type convertedResponseBody struct {
+	io.ReadCloser
+	usage tokenUsage
+}
+type observedResponseBody struct {
+	io.Reader
+	io.Closer
+}
+
+func readAudioResponse(body io.ReadCloser) ([]byte, error) {
+	defer body.Close()
+	data, err := io.ReadAll(io.LimitReader(body, maxBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxBodyBytes {
+		return nil, errors.New("audio response exceeds 32 MiB conversion limit")
+	}
+	return data, nil
 }

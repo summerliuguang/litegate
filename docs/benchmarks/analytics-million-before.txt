@@ -1,0 +1,12 @@
+goos: linux
+goarch: amd64
+pkg: litegate/internal/store
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkAnalyticsMillion
+    analytics_benchmark_test.go:22: seed one million: 2.757858518s
+BenchmarkAnalyticsMillion/dashboard
+BenchmarkAnalyticsMillion/dashboard-4         	       1	11272592148 ns/op
+BenchmarkAnalyticsMillion/trend
+BenchmarkAnalyticsMillion/trend-4             	       1	2325303520 ns/op
+PASS
+ok  	litegate/internal/store	16.406s
