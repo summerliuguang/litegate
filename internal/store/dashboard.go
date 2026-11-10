@@ -4,6 +4,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"time"
 )
 
 // UsagePoint 是单日用量，Day 格式为 YYYY-MM-DD（UTC）。
@@ -79,34 +80,36 @@ type Dashboard struct {
 // 近 7 天（含今天）的时间窗条件，ts 为 UTC 文本。
 const sqlLast7Days = `ts >= datetime('now', '-6 days', 'start of day')`
 
-func (s *Store) Dashboard() (*Dashboard, error) {
+func (s *Store) dashboard(db queryer, now time.Time) (*Dashboard, error) {
 	d := &Dashboard{
 		Daily:     []UsagePoint{},
 		ByModel:   []ModelUsage{},
 		ByChannel: []ChannelUsage{},
 		ByApp:     []AppUsage{},
 	}
-	today := `ts >= datetime('now', 'start of day')`
-	err := s.DB.QueryRow(`
-		SELECT
-			(SELECT COUNT(*) FROM request_logs WHERE `+today+`),
-			(SELECT COUNT(*) FROM request_logs WHERE `+today+` AND (status >= 400 OR error != '')),
-			(SELECT IFNULL(SUM(prompt_tokens), 0) FROM request_logs WHERE `+today+`),
-			(SELECT IFNULL(SUM(completion_tokens), 0) FROM request_logs WHERE `+today+`),
-			(SELECT IFNULL(ROUND(SUM(cost), 6), 0) FROM request_logs WHERE `+today+`),
-			(SELECT COUNT(*) FROM channels),
-			(SELECT COUNT(*) FROM channels WHERE enabled = 1),
-			(SELECT COUNT(*) FROM api_keys)`).Scan(
+	dayStart := utcDayStart(now)
+	until := dayStart.AddDate(0, 0, 1)
+	today := analyticsRange("ts", dayStart, until)
+	last7Days := analyticsRange("ts", dayStart.AddDate(0, 0, -6), until)
+	last7Channels := analyticsRange("r.ts", dayStart.AddDate(0, 0, -6), until)
+	err := db.QueryRow(`
+		SELECT IFNULL(SUM(requests), 0), IFNULL(SUM(failed_requests), 0),
+		       IFNULL(SUM(prompt_tokens), 0), IFNULL(SUM(completion_tokens), 0),
+		       IFNULL(ROUND(SUM(cost), 6), 0),
+		       (SELECT COUNT(*) FROM channels),
+		       (SELECT COUNT(*) FROM channels WHERE enabled = 1),
+		       (SELECT COUNT(*) FROM api_keys)
+		FROM request_usage_hour WHERE `+today).Scan(
 		&d.TodayRequests, &d.TodayErrors, &d.TodayPromptTokens,
 		&d.TodayCompletionTokens, &d.TodayCostUSD, &d.Channels, &d.ChannelsEnabled, &d.Keys)
 	if err != nil {
 		return nil, err
 	}
 
-	rows, err := s.DB.Query(`
-		SELECT date(ts), COUNT(*), IFNULL(SUM(status >= 400), 0),
+	rows, err := db.Query(`
+		SELECT date(ts), IFNULL(SUM(requests), 0), IFNULL(SUM(errors), 0),
 		       IFNULL(SUM(prompt_tokens), 0), IFNULL(SUM(completion_tokens), 0), IFNULL(ROUND(SUM(cost), 6), 0)
-		FROM request_logs WHERE ` + sqlLast7Days + `
+		FROM request_usage_hour WHERE ` + last7Days + `
 		GROUP BY date(ts) ORDER BY date(ts)`)
 	if err != nil {
 		return nil, err
@@ -125,12 +128,12 @@ func (s *Store) Dashboard() (*Dashboard, error) {
 		return nil, err
 	}
 
-	rows, err = s.DB.Query(`
-		SELECT model, COUNT(*), IFNULL(SUM(prompt_tokens), 0), IFNULL(SUM(completion_tokens), 0),
+	rows, err = db.Query(`
+		SELECT model, IFNULL(SUM(requests), 0), IFNULL(SUM(prompt_tokens), 0), IFNULL(SUM(completion_tokens), 0),
 		       IFNULL(SUM(cache_tokens), 0), IFNULL(ROUND(SUM(cost), 6), 0),
 		       CASE WHEN IFNULL(SUM(latency_ms), 0) > 0
 		            THEN ROUND(SUM(completion_tokens) * 1000.0 / SUM(latency_ms), 1) ELSE 0 END
-		FROM request_logs WHERE ` + sqlLast7Days + ` AND model != ''
+		FROM request_usage_hour WHERE ` + last7Days + ` AND model != ''
 		GROUP BY model ORDER BY SUM(cost) DESC, model LIMIT 10`)
 	if err != nil {
 		return nil, err
@@ -150,14 +153,14 @@ func (s *Store) Dashboard() (*Dashboard, error) {
 	}
 
 	// 渠道可能已被删除：只统计仍存在的渠道（已删除渠道不在榜单展示）
-	rows, err = s.DB.Query(`
-		SELECT r.channel_id, IFNULL(c.name, ''), COUNT(*),
+	rows, err = db.Query(`
+		SELECT r.channel_id, IFNULL(c.name, ''), IFNULL(SUM(requests), 0),
 		       IFNULL(SUM(r.prompt_tokens), 0), IFNULL(SUM(r.completion_tokens), 0),
 		       IFNULL(SUM(r.cache_tokens), 0), IFNULL(ROUND(SUM(r.cost), 6), 0),
 		       CASE WHEN IFNULL(SUM(r.latency_ms), 0) > 0
 		            THEN ROUND(SUM(r.completion_tokens) * 1000.0 / SUM(r.latency_ms), 1) ELSE 0 END
-		FROM request_logs r LEFT JOIN channels c ON c.id = r.channel_id
-		WHERE r.` + sqlLast7Days + ` AND c.id IS NOT NULL
+		FROM request_usage_hour r LEFT JOIN channels c ON c.id = r.channel_id
+		WHERE ` + last7Channels + ` AND c.id IS NOT NULL
 		GROUP BY r.channel_id ORDER BY SUM(r.cost) DESC, r.channel_id LIMIT 10`)
 	if err != nil {
 		return nil, err
@@ -175,50 +178,64 @@ func (s *Store) Dashboard() (*Dashboard, error) {
 		return nil, err
 	}
 
-	// 今日成功请求的延迟明细：算 P50/P95 与平均生成速度（家庭量级直接全量取回）
-	rows2, err := s.DB.Query(`
-		SELECT latency_ms, ttfb_ms, completion_tokens FROM request_logs
-		WHERE ` + today + ` AND status < 400 AND error = ''`)
+	// Exact percentiles from a latency histogram: repeated latencies cross the
+	// database boundary once instead of retaining every request in Go memory.
+	rows2, err := db.Query(`
+		SELECT latency_ms, IFNULL(SUM(requests), 0),
+		       IFNULL(SUM(gen_ms), 0),
+		       IFNULL(SUM(gen_tokens), 0)
+		FROM request_latency_day WHERE ` + today + `
+		GROUP BY latency_ms ORDER BY latency_ms`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows2.Close()
-	var latencies []int64
-	var genMs, genTok int64
+	type latencyBucket struct{ latency, count int64 }
+	var histogram []latencyBucket
+	var genMs, genTok, totalSamples int64
 	for rows2.Next() {
-		var latency, ttfb, completion int64
-		if err := rows2.Scan(&latency, &ttfb, &completion); err != nil {
+		var latency, count, ms, tokens int64
+		if err := rows2.Scan(&latency, &count, &ms, &tokens); err != nil {
 			return nil, err
 		}
-		latencies = append(latencies, latency)
-		if completion > 0 && latency > ttfb {
-			genMs += latency - ttfb
-			genTok += completion
-		}
+		histogram = append(histogram, latencyBucket{latency, count})
+		totalSamples += count
+		genMs += ms
+		genTok += tokens
 	}
 	if err := rows2.Err(); err != nil {
 		return nil, err
 	}
-	d.LatencyP50Ms = percentile(latencies, 0.50)
-	d.LatencyP95Ms = percentile(latencies, 0.95)
+	var seen int64
+	p50, p95 := (totalSamples+1)/2, int64(math.Ceil(float64(totalSamples)*0.95))
+	for _, bucket := range histogram {
+		previous := seen
+		seen += bucket.count
+		if previous < p50 && seen >= p50 {
+			d.LatencyP50Ms = bucket.latency
+		}
+		if previous < p95 && seen >= p95 {
+			d.LatencyP95Ms = bucket.latency
+		}
+	}
 	if genMs > 0 {
 		d.AvgTps = float64(genTok) / (float64(genMs) / 1000)
 	}
 
 	// 实时 RPM/TPM（最近 60 秒）
-	if err := s.DB.QueryRow(`
+	if err := db.QueryRow(`
 		SELECT COUNT(*), IFNULL(SUM(prompt_tokens + completion_tokens), 0)
-		FROM request_logs WHERE ts >= datetime('now', '-60 seconds')`).
+		FROM request_logs WHERE ts >= ? AND ts <= ?`, now.UTC().Add(-time.Minute).Format("2006-01-02 15:04:05"), now.UTC().Format("2006-01-02 15:04:05")).
 		Scan(&d.RPM, &d.TPM); err != nil {
 		return nil, err
 	}
 
 	// 今日按应用分摊（X-LiteGate-App；空串显示为 "(未标注)"）
-	rows3, err := s.DB.Query(`
-		SELECT app, COUNT(*), IFNULL(SUM(prompt_tokens), 0), IFNULL(SUM(completion_tokens), 0),
+	rows3, err := db.Query(`
+		SELECT app, IFNULL(SUM(requests), 0), IFNULL(SUM(prompt_tokens), 0), IFNULL(SUM(completion_tokens), 0),
 		       IFNULL(ROUND(SUM(cost), 6), 0)
-		FROM request_logs WHERE ` + today + `
-		GROUP BY app ORDER BY SUM(cost) DESC, COUNT(*) DESC`)
+		FROM request_usage_hour WHERE ` + today + `
+		GROUP BY app ORDER BY SUM(cost) DESC, IFNULL(SUM(requests), 0) DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -239,24 +256,26 @@ func (s *Store) Dashboard() (*Dashboard, error) {
 
 	// 成本按币种拆分：价格行标注了币种（USD/CNY），跨模型聚合的数值不可互加。
 	// byModel 行模型唯一可直接标注；其余维度按「维度 × 模型」的模型成本桶进对应币种。
-	prices, err := s.ListModelPrices()
+	prices, err := listModelPrices(db)
 	if err != nil {
 		prices = nil
 	}
+	modelBuckets := map[string]map[string]float64{}
+	if err := s.bucketModelCosts(db, prices, "WHERE "+last7Days, "model", modelBuckets); err != nil {
+		return nil, err
+	}
 	for i := range d.ByModel {
-		if c := matchCurrency(prices, d.ByModel[i].Model); d.ByModel[i].CostUSD != 0 && c != "" {
-			d.ByModel[i].CostByCurrency = map[string]float64{c: d.ByModel[i].CostUSD}
-		}
+		d.ByModel[i].CostByCurrency = modelBuckets[d.ByModel[i].Model]
 	}
 
 	todayBuckets := map[string]map[string]float64{}
-	if err := s.bucketModelCosts(prices, `WHERE ts >= datetime('now', 'start of day')`, "", todayBuckets); err != nil {
+	if err := s.bucketModelCosts(db, prices, "WHERE "+today, "", todayBuckets); err != nil {
 		return nil, err
 	}
 	d.TodayCostByCurrency = todayBuckets[""]
 
 	dayBuckets := map[string]map[string]float64{}
-	if err := s.bucketModelCosts(prices, sqlLast7DaysWhere(), "date(ts)", dayBuckets); err != nil {
+	if err := s.bucketModelCosts(db, prices, "WHERE "+last7Days, "date(ts)", dayBuckets); err != nil {
 		return nil, err
 	}
 	for i := range d.Daily {
@@ -264,7 +283,7 @@ func (s *Store) Dashboard() (*Dashboard, error) {
 	}
 
 	chBuckets := map[string]map[string]float64{}
-	if err := s.bucketModelCosts(prices, sqlLast7DaysWhere(), "channel_id", chBuckets); err != nil {
+	if err := s.bucketModelCosts(db, prices, "WHERE "+last7Days, "channel_id", chBuckets); err != nil {
 		return nil, err
 	}
 	for i := range d.ByChannel {
@@ -272,7 +291,7 @@ func (s *Store) Dashboard() (*Dashboard, error) {
 	}
 
 	appBuckets := map[string]map[string]float64{}
-	if err := s.bucketModelCosts(prices, `WHERE ts >= datetime('now', 'start of day')`, "app", appBuckets); err != nil {
+	if err := s.bucketModelCosts(db, prices, "WHERE "+today, "app", appBuckets); err != nil {
 		return nil, err
 	}
 	for i := range d.ByApp {
@@ -285,10 +304,6 @@ func (s *Store) Dashboard() (*Dashboard, error) {
 	return d, nil
 }
 
-// sqlLast7DaysWhere 返回近 7 天（含今天，UTC）的 WHERE 片段（含 WHERE 关键字），
-// 与 sqlLast7Days 常量口径一致。
-func sqlLast7DaysWhere() string { return `WHERE ts >= datetime('now', '-6 days', 'start of day')` }
-
 // matchCurrency 返回模型价格行的币种标注；无价格行时返回空串（成本本就记 0）。
 func matchCurrency(prices []ModelPrice, model string) string {
 	if p := MatchPrice(prices, model); p != nil {
@@ -299,27 +314,27 @@ func matchCurrency(prices []ModelPrice, model string) string {
 
 // bucketModelCosts 把窗口内成本按「维度 × 模型」聚到币种桶：dim 为空时全部进 ""
 // 单桶，否则按维度表达式分组（键以文本形式回传，如 channel_id 的十进制字符串）。
-func (s *Store) bucketModelCosts(prices []ModelPrice, where, dim string, out map[string]map[string]float64) error {
+func (s *Store) bucketModelCosts(db queryer, prices []ModelPrice, where, dim string, out map[string]map[string]float64) error {
 	group := ""
 	if dim != "" {
 		group = dim + ", "
 	}
-	rows, err := s.DB.Query(`SELECT ` + group + `model, IFNULL(ROUND(SUM(cost), 6), 0)
-		FROM request_logs ` + where + ` GROUP BY ` + group + `model`)
+	rows, err := db.Query(`SELECT ` + group + `model, currency, IFNULL(ROUND(SUM(cost), 6), 0)
+		FROM request_usage_hour ` + where + ` GROUP BY ` + group + `model, currency`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var key, model string
+		var key, model, currency string
 		var cost float64
 		if dim == "" {
-			if err := rows.Scan(&model, &cost); err != nil {
+			if err := rows.Scan(&model, &currency, &cost); err != nil {
 				return err
 			}
 		} else {
 			var dimKey any
-			if err := rows.Scan(&dimKey, &model, &cost); err != nil {
+			if err := rows.Scan(&dimKey, &model, &currency, &cost); err != nil {
 				return err
 			}
 			switch k := dimKey.(type) {
@@ -336,7 +351,10 @@ func (s *Store) bucketModelCosts(prices []ModelPrice, where, dim string, out map
 		if cost == 0 {
 			continue
 		}
-		c := matchCurrency(prices, model)
+		c := currency
+		if c == "" {
+			c = matchCurrency(prices, model)
+		}
 		if c == "" {
 			c = "USD"
 		}
@@ -348,68 +366,48 @@ func (s *Store) bucketModelCosts(prices []ModelPrice, where, dim string, out map
 	return rows.Err()
 }
 
-// percentile 返回样本的最近秩分位数（向上取整索引）；样本就地排序，空样本返回 0。
-func percentile(samples []int64, p float64) int64 {
-	n := len(samples)
-	if n == 0 {
-		return 0
-	}
-	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
-	idx := int(math.Ceil(p * float64(n)))
-	if idx < 1 {
-		idx = 1
-	}
-	if idx > n {
-		idx = n
-	}
-	return samples[idx-1]
-}
-
 // TrendPoint 是趋势折线图的单（时间桶，对象）聚合点。
 type TrendPoint struct {
-	T                string  `json:"t"`      // 桶时间:小时桶 "YYYY-MM-DD HH:00" / 天桶 "YYYY-MM-DD"（本地时区）
-	Tokens           int64   `json:"tokens"` // 输入+输出合计
-	CacheTokens      int64   `json:"cache"`
-	Cost             float64 `json:"cost"`
-	Tps              float64 `json:"tps"` // 该桶平均输出速度（tok/s）
-	PromptTokens     int64   `json:"prompt"`
-	CompletionTokens int64   `json:"completion"`
+	T                string             `json:"t"`      // 桶时间:小时桶 "YYYY-MM-DD HH:00" / 天桶 "YYYY-MM-DD"（UTC）
+	Tokens           int64              `json:"tokens"` // 输入+输出合计
+	CacheTokens      int64              `json:"cache"`
+	Cost             float64            `json:"cost"` // 单币种兼容字段；混合币种为0，使用 CostByCurrency
+	CostByCurrency   map[string]float64 `json:"cost_by_currency"`
+	Tps              float64            `json:"tps"` // 该桶平均输出速度（tok/s）
+	PromptTokens     int64              `json:"prompt"`
+	CompletionTokens int64              `json:"completion"`
 
 	latencyMs int64  // 合并「其他」时重算 tps 用，不序列化
 	name      string // 该行对象名（模型/渠道/密钥），合并时定位用，不序列化
-	model     string // 该行原始模型名（币种判定用），不序列化
 }
 
 // TrendSeries 是趋势图里一个对象（模型/渠道/密钥）的完整序列。
 type TrendSeries struct {
 	Name   string       `json:"name"`
 	Points []TrendPoint `json:"points"`
-	// Currency 该序列成本的标注币种（序列内各模型价格币种中成本占比最高者），
-	// 无成本时为空。
+	// Currency 单币种序列的兼容标注；混合币种或无成本时为空。
 	Currency string `json:"currency,omitempty"`
-
-	curTally map[string]float64 `json:"-"` // 币种 → 成本合计（组装期临时）
 }
 
 // UsageTrend 按 dim（model|channel|key）与 rng（today|yesterday|7d|30d）返回
-// 折线图序列。今天/昨天按小时分桶、7/30 天按天分桶，均为本地时区；
+// 折线图序列。今天/昨天按小时分桶、7/30 天按天分桶，均为 UTC；
 // 对象按桶内 Token 总量取 Top8，其余合并为「其他」（tps 按总输出/总耗时重算）。
-func (s *Store) UsageTrend(dim, rng string) (string, []TrendSeries, error) {
-	var bucket, from string
+func (s *Store) usageTrend(db queryer, now time.Time, dim, rng string) (string, []TrendSeries, error) {
+	dayStart := utcDayStart(now)
+	from, until := dayStart.AddDate(0, 0, -6), dayStart.AddDate(0, 0, 1)
+	bucket := `date(r.ts)`
 	switch rng {
 	case "today":
-		bucket, from = `strftime('%Y-%m-%d %H:00', r.ts, 'localtime')`, `datetime('now','localtime','start of day','utc')`
+		bucket = `strftime('%Y-%m-%d %H:00',r.ts)`
+		from = dayStart
 	case "yesterday":
-		bucket, from = `strftime('%Y-%m-%d %H:00', r.ts, 'localtime')`, `datetime('now','localtime','start of day','-1 day','utc')`
+		bucket = `strftime('%Y-%m-%d %H:00',r.ts)`
+		from = dayStart.AddDate(0, 0, -1)
+		until = dayStart
 	case "30d":
-		bucket, from = `date(r.ts, 'localtime')`, `datetime('now','localtime','start of day','-29 day','utc')`
-	default: // 7d:含今天在内最近 7 个本地日
-		bucket, from = `date(r.ts, 'localtime')`, `datetime('now','localtime','start of day','-6 day','utc')`
+		from = dayStart.AddDate(0, 0, -29)
 	}
-	to := ""
-	if rng == "yesterday" {
-		to = ` AND r.ts < datetime('now','localtime','start of day','utc')`
-	}
+	window := analyticsRange("r.ts", from, until)
 	join, name, dimWhere := ``, `r.model`, `r.model != ''`
 	switch dim {
 	case "channel":
@@ -417,17 +415,17 @@ func (s *Store) UsageTrend(dim, rng string) (string, []TrendSeries, error) {
 	case "key":
 		join, name, dimWhere = ` LEFT JOIN api_keys k ON k.id = r.api_key_id`, `IFNULL(k.name, '')`, `k.id IS NOT NULL`
 	}
-	// 价格表先于主查询加载:连接池上限为 1,主查询迭代期间再开查询会自死锁
-	prices, err := s.ListModelPrices()
+	// 价格表先于主查询加载:统计连接池上限为 1,主查询迭代期间再开查询会自死锁
+	prices, err := listModelPrices(db)
 	if err != nil {
 		return "", nil, err
 	}
-	rows, err := s.DB.Query(`
-		SELECT ` + bucket + `, ` + name + `, r.model, IFNULL(SUM(r.prompt_tokens), 0), IFNULL(SUM(r.completion_tokens), 0),
+	rows, err := db.Query(`
+		SELECT ` + bucket + `, ` + name + `, r.model, r.currency, IFNULL(SUM(r.prompt_tokens), 0), IFNULL(SUM(r.completion_tokens), 0),
 		       IFNULL(SUM(r.cache_tokens), 0), IFNULL(ROUND(SUM(r.cost), 6), 0), IFNULL(SUM(r.latency_ms), 0)
-		FROM request_logs r` + join + `
-		WHERE ` + dimWhere + ` AND r.ts >= ` + from + to + `
-		GROUP BY 1, 2, 3 ORDER BY 1`)
+		FROM request_usage_hour r` + join + `
+		WHERE ` + dimWhere + ` AND ` + window + `
+		GROUP BY 1, 2, 3, 4 ORDER BY 1`)
 	if err != nil {
 		return "", nil, err
 	}
@@ -440,14 +438,20 @@ func (s *Store) UsageTrend(dim, rng string) (string, []TrendSeries, error) {
 	var flat []TrendPoint
 	for rows.Next() {
 		var p TrendPoint
-		var b, n, m string
-		if err := rows.Scan(&b, &n, &m, &p.PromptTokens, &p.CompletionTokens,
+		var b, n, m, currency string
+		if err := rows.Scan(&b, &n, &m, &currency, &p.PromptTokens, &p.CompletionTokens,
 			&p.CacheTokens, &p.Cost, &p.latencyMs); err != nil {
 			return "", nil, err
 		}
 		p.T = b
 		p.name = n
-		p.model = m
+		if currency == "" {
+			currency = matchCurrency(prices, m)
+		}
+		if currency == "" {
+			currency = "USD"
+		}
+		p.CostByCurrency = map[string]float64{currency: p.Cost}
 		p.Tokens = p.PromptTokens + p.CompletionTokens
 		if p.latencyMs > 0 {
 			p.Tps = math.Round(float64(p.CompletionTokens)*1000/float64(p.latencyMs)*10) / 10
@@ -462,7 +466,12 @@ func (s *Store) UsageTrend(dim, rng string) (string, []TrendSeries, error) {
 	for n := range totals {
 		top = append(top, n)
 	}
-	sort.Slice(top, func(i, j int) bool { return totals[top[i]] > totals[top[j]] })
+	sort.Slice(top, func(i, j int) bool {
+		if totals[top[i]] == totals[top[j]] {
+			return top[i] < top[j]
+		}
+		return totals[top[i]] > totals[top[j]]
+	})
 	if len(top) > 8 {
 		top = top[:8]
 	}
@@ -480,13 +489,11 @@ func (s *Store) UsageTrend(dim, rng string) (string, []TrendSeries, error) {
 		}
 		ser := byName[n]
 		if ser == nil {
-			ser = &TrendSeries{Name: n, curTally: map[string]float64{}}
+			ser = &TrendSeries{Name: n}
 			byName[n] = ser
 			nameOrder = append(nameOrder, n)
 		}
-		if p.Cost != 0 {
-			ser.curTally[matchCurrency(prices, p.model)] += p.Cost
-		}
+
 		// flat 已按桶排序;「其他」同一桶的多行在此累加成一个点
 		if len(ser.Points) > 0 && ser.Points[len(ser.Points)-1].T == p.T {
 			last := &ser.Points[len(ser.Points)-1]
@@ -494,7 +501,9 @@ func (s *Store) UsageTrend(dim, rng string) (string, []TrendSeries, error) {
 			last.CompletionTokens += p.CompletionTokens
 			last.CacheTokens += p.CacheTokens
 			last.Tokens += p.Tokens
-			last.Cost += p.Cost
+			for currency, cost := range p.CostByCurrency {
+				last.CostByCurrency[currency] += cost
+			}
 			last.latencyMs += p.latencyMs
 			if last.latencyMs > 0 {
 				last.Tps = math.Round(float64(last.CompletionTokens)*1000/float64(last.latencyMs)*10) / 10
@@ -509,13 +518,25 @@ func (s *Store) UsageTrend(dim, rng string) (string, []TrendSeries, error) {
 	series := make([]TrendSeries, 0, len(nameOrder))
 	for _, n := range nameOrder {
 		ser := byName[n]
-		best, bestSum := "", 0.0
-		for c, sum := range ser.curTally {
-			if math.Abs(sum) > math.Abs(bestSum) || (math.Abs(sum) == math.Abs(bestSum) && c < best) {
-				best, bestSum = c, sum
+		currencies := map[string]bool{}
+		for i := range ser.Points {
+			point := &ser.Points[i]
+			point.Cost = 0
+			for c, cost := range point.CostByCurrency {
+				cost = math.Round(cost*1e6) / 1e6
+				point.CostByCurrency[c] = cost
+				currencies[c] = true
+				if len(point.CostByCurrency) == 1 {
+					point.Cost = cost
+				}
 			}
 		}
-		ser.Currency = best
+		if len(currencies) == 1 {
+			for c := range currencies {
+				ser.Currency = c
+			}
+		}
+
 		series = append(series, *ser)
 	}
 	return bucketKind, series, nil

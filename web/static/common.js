@@ -117,7 +117,36 @@ function renderNav() {
   document.body.appendChild(backdrop);
   document.body.appendChild(drawer);
 
-  const setOpen = open => document.body.classList.toggle('mnav-open', open);
+  const trigger = bar.querySelector('.topbar-icon');
+  drawer.id = 'mobileNavigation';
+  drawer.setAttribute('role', 'dialog');
+  drawer.setAttribute('aria-modal', 'true');
+  drawer.setAttribute('aria-label', '导航菜单');
+  drawer.inert = true;
+  trigger.setAttribute('aria-controls', drawer.id);
+  trigger.setAttribute('aria-expanded', 'false');
+  const background = [aside, bar, document.querySelector('.wrap')].filter(Boolean);
+  let returnFocus = null;
+  const setOpen = open => {
+    if (open) returnFocus = document.activeElement;
+    document.body.classList.toggle('mnav-open', open);
+    trigger.setAttribute('aria-expanded', String(open));
+    drawer.inert = !open;
+    background.forEach(el => { el.inert = open; });
+    if (open) drawer.querySelector('.mnav-close').focus();
+    else if (returnFocus) { returnFocus.focus(); returnFocus = null; }
+  };
+  document.addEventListener('keydown', e => {
+    if (!document.body.classList.contains('mnav-open')) return;
+    if (e.key === 'Escape') { e.preventDefault(); setOpen(false); }
+    if (e.key === 'Tab') {
+      const controls = [...drawer.querySelectorAll('a[href], button:not([disabled])')];
+      const first = controls[0], last = controls[controls.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  });
+  window.matchMedia('(min-width:900px)').addEventListener('change', e => { if (e.matches) setOpen(false); });
   bar.querySelector('.topbar-icon').addEventListener('click', () => setOpen(true));
   backdrop.addEventListener('click', () => setOpen(false));
   drawer.querySelector('.mnav-close').addEventListener('click', () => setOpen(false));

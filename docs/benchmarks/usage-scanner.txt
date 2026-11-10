@@ -1,0 +1,9 @@
+goos: linux
+goarch: amd64
+pkg: litegate/internal/api
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+BenchmarkJSONUsageScanner-4   	     604	   1911665 ns/op	 548.56 MB/s	     256 B/op	      11 allocs/op
+BenchmarkJSONUsageScanner-4   	     570	   1911877 ns/op	 548.50 MB/s	     266 B/op	      11 allocs/op
+BenchmarkJSONUsageScanner-4   	     675	   1967165 ns/op	 533.09 MB/s	     272 B/op	      11 allocs/op
+PASS
+ok  	litegate/internal/api	4.189s

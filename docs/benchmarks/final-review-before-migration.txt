@@ -1,0 +1,5 @@
+--- FAIL: TestBudgetBackfillSnapshotCurrencyAndAtomicity (0.01s)
+    analytics_rollup_test.go:387: partial migration committed: 1
+FAIL
+FAIL	litegate/internal/store	0.017s
+FAIL

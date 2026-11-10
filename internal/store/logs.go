@@ -23,17 +23,17 @@ type RequestLog struct {
 	CacheTokens      int64   `json:"cache_tokens"`
 	CostUSD          float64 `json:"cost_usd"`
 	Error            string  `json:"error"`
-	// Currency 由查询侧按价格表回填（该模型价格的币种），不落库。
+	// Currency 保存计费时的币种；旧记录为空，由展示层按现价回退。
 	Currency string `json:"currency,omitempty"`
 }
 
 func (s *Store) InsertRequestLog(l *RequestLog) error {
 	res, err := s.DB.Exec(
 		`INSERT INTO request_logs(api_key_id, channel_id, model, protocol, app, status,
-		     latency_ms, ttfb_ms, prompt_tokens, completion_tokens, cache_tokens, cost, error)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		     latency_ms, ttfb_ms, prompt_tokens, completion_tokens, cache_tokens, cost, error, currency)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		l.APIKeyID, l.ChannelID, l.Model, l.Protocol, l.App, l.Status,
-		l.LatencyMs, l.TtfbMs, l.PromptTokens, l.CompletionTokens, l.CacheTokens, l.CostUSD, l.Error,
+		l.LatencyMs, l.TtfbMs, l.PromptTokens, l.CompletionTokens, l.CacheTokens, l.CostUSD, l.Error, l.Currency,
 	)
 	if err != nil {
 		return err
@@ -75,7 +75,7 @@ func (s *Store) ListLogs(f LogFilter) (*LogPage, error) {
 	}
 	rows, err := s.DB.Query(
 		`SELECT id, ts, api_key_id, channel_id, model, protocol, app, status,
-		        latency_ms, ttfb_ms, prompt_tokens, completion_tokens, cache_tokens, cost, error
+		        latency_ms, ttfb_ms, prompt_tokens, completion_tokens, cache_tokens, cost, error, currency
 		 FROM request_logs`+where+` ORDER BY id DESC LIMIT ? OFFSET ?`,
 		append(args, f.Limit, f.Offset)...)
 	if err != nil {
@@ -86,7 +86,7 @@ func (s *Store) ListLogs(f LogFilter) (*LogPage, error) {
 		var l RequestLog
 		if err := rows.Scan(&l.ID, &l.Ts, &l.APIKeyID, &l.ChannelID, &l.Model,
 			&l.Protocol, &l.App, &l.Status, &l.LatencyMs, &l.TtfbMs,
-			&l.PromptTokens, &l.CompletionTokens, &l.CacheTokens, &l.CostUSD, &l.Error); err != nil {
+			&l.PromptTokens, &l.CompletionTokens, &l.CacheTokens, &l.CostUSD, &l.Error, &l.Currency); err != nil {
 			return nil, err
 		}
 		page.Items = append(page.Items, l)
@@ -148,6 +148,9 @@ type LogSummary struct {
 	Cost             float64 `json:"cost"`
 	Currency         string  `json:"currency,omitempty"`
 	LastTs           string  `json:"last_ts"`
+	// CostByCurrency is populated by the API after resolving legacy currencies.
+	// Cost and Currency remain available for single-currency summaries.
+	CostByCurrency map[string]float64 `json:"cost_by_currency,omitempty"`
 }
 
 // LogSummaries 按现有过滤条件聚合每个模型的请求摘要(不含未记录模型名的失败请求)。
@@ -161,9 +164,9 @@ func (s *Store) LogSummaries(f LogFilter) ([]LogSummary, error) {
 	rows, err := s.DB.Query(
 		`SELECT model, COUNT(*), IFNULL(SUM(status >= 400 OR error != ''), 0),
 		        IFNULL(SUM(prompt_tokens), 0), IFNULL(SUM(completion_tokens), 0), IFNULL(SUM(cache_tokens), 0),
-		        IFNULL(ROUND(SUM(cost), 6), 0), MAX(ts)
+		        IFNULL(ROUND(SUM(cost), 6), 0), MAX(ts), currency
 		 FROM request_logs`+where+`
-		 GROUP BY model ORDER BY MAX(ts) DESC`, args...)
+		 GROUP BY model, currency ORDER BY MAX(ts) DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +175,7 @@ func (s *Store) LogSummaries(f LogFilter) ([]LogSummary, error) {
 	for rows.Next() {
 		var m LogSummary
 		if err := rows.Scan(&m.Model, &m.Requests, &m.Errors, &m.PromptTokens,
-			&m.CompletionTokens, &m.CacheTokens, &m.Cost, &m.LastTs); err != nil {
+			&m.CompletionTokens, &m.CacheTokens, &m.Cost, &m.LastTs, &m.Currency); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

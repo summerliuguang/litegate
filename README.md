@@ -3,12 +3,13 @@
 轻量级 AI 网关：把多个大模型供应商/中转站收敛到一个入口，带 Web 管理页面。
 对标 LiteLLM（网关能力）与 cc-switch（供应商切换体验），但只做一件事：**单二进制、低占用、开箱即用**。
 
-- **单二进制 ~12MB**，空载内存 ~20MB，无 Python / Node 运行时，**不依赖 Docker**
+- **单二进制**，体积和空载内存随平台、构建参数变化（本轮实测见 [验证记录](docs/VALIDATION.md)），无 Python / Node 运行时，**不依赖 Docker**
 - 默认 SQLite（WAL），零外部服务；凭证 AES-256-GCM 加密存储
 - 下游协议：OpenAI（`/v1/chat/completions`、`/v1/embeddings`、`/v1/responses`）、Anthropic（`/v1/messages`、`/v1/messages/count_tokens`，Claude Code 可直连）；Responses 桥接到 chat 渠道，Codex 等原生 Responses 客户端可用
 - 上游渠道：OpenAI 兼容 / Anthropic 兼容，**单渠道多密钥**加权轮询、坏 key 自动冷却换下一把、后台巡检自动恢复；按优先级故障转移；模型映射（对外别名 → 上游真实名）
 - 虚拟密钥治理：模型白名单（下拉勾选式配置）、RPM/TPM 限速、日/月预算（美元或 token，超限 429）、过期时间。
   预算账本按密钥×日独立累计（key_usage_day，不随日志保留期清理，月预算跨重启不漏账）；
+  预算为完成请求后累计的软限制；单次大请求及已放行的并发请求可能超额。启用预算或切换日/月周期立即包含当前周期已完成的用量。
   ¥ 计价模型的成本按 `usd_cny_rate`（默认 7.2，管理 API 可改）折算成美元等值后与 budget_usd 比较
 - 数据面错误响应带机器可读 `code` 字段：`invalid_key` / `key_expired` / `rate_limited_rpm` /
   `rate_limited_tpm` / `rate_limited_concurrency` / `budget_exhausted` / `model_not_allowed` /
@@ -17,11 +18,13 @@
 - 用量统计：请求级 Token 计量（含 prompt caching 缓存 token，读按 1/10 价计费）、成本核算（模型价格可配）、按虚拟密钥的输出速度统计（近 7 天加权平均 + 日志逐条 tok/s）、日志过滤分页、用量看板（今日/近 7 天/按渠道/按模型/按应用）
 - 内嵌管理页面与管理 API：渠道 CRUD、连通性测试、虚拟密钥、请求日志、用量看板；管理页适配手机端（表格自动转卡片式布局，统计卡两列）
 
+> 本轮改进：[五阶段计划](docs/IMPROVEMENT_PLAN.md) · [验证与性能记录](docs/VALIDATION.md) · [兼容边界](docs/COMPATIBILITY.md) · [统计聚合与 WAL](docs/ANALYTICS.md) · [最终审查与剩余项](docs/FINAL_REVIEW.md)。
+
 > 设计文档见 [docs/DESIGN.md](docs/DESIGN.md)。M1–M5 已全部交付（数据面 / 用量统计 / 管理台与安全加固 / 协议补齐 / 渠道密钥治理 / 可观测与运维）；后续 M6+ 按需推进。
 
 ## 构建
 
-需要 Go 1.22+：
+需要 Go 1.27+（与 `go.mod` 保持一致）：
 
 ```bash
 go build -trimpath -ldflags="-s -w" -o litegate ./cmd/litegate
@@ -98,7 +101,9 @@ curl -X PUT http://127.0.0.1:8080/api/admin/prices \
   -d '{"model":"deepseek-v4-flash","input_price":3,"cache_read_price":0.1,"output_price":9,"currency":"CNY","offpeak_ratio":0.5}'
 ```
 
-仪表盘与日志的成本展示跟随价格表币种（¥/$），跨模型聚合按 `¥x + $y` 拆分显示、不互加。
+新日志保存计费时的币种（¥/$）；修改价格币种不会改变这些历史记录。旧日志没有币种快照，仍按当前价格表回退，无法恢复过去的币种变更。
+仪表盘和趋势图按币种分别展示、不互加。仪表盘日界线、趋势桶和预算周期统一采用 UTC。
+趋势 API 的 `cost_by_currency` 是权威成本字段；混合币种点的兼容字段 `cost` 为 0，序列 `currency` 留空。
 
 价格匹配先精确、再退回最长的段边界前缀：`gpt-4o` 会覆盖 `gpt-4o-2024-08-06`，
 但 `gpt-4` 不会匹配 `gpt-4o`。

@@ -1,0 +1,12 @@
+--- FAIL: TestInvalidUsageCannotCreditBudget (0.00s)
+    improvement_test.go:246: invalid usage accepted: {"usage":{"prompt_tokens":-10,"completion_tokens":-20}} => {prompt:-10 completion:-20 cacheRead:0 cacheWrite:0}
+    improvement_test.go:246: invalid usage accepted: {"usage":{"prompt_tokens":10,"completion_tokens":-20}} => {prompt:10 completion:-20 cacheRead:0 cacheWrite:0}
+    improvement_test.go:247: SSE parser accepted invalid usage: {"usage":{"prompt_tokens":10,"completion_tokens":-20}} => {prompt:10 completion:-20 cacheRead:0 cacheWrite:0}
+    improvement_test.go:246: invalid usage accepted: {"usage":{"prompt_tokens":10,"prompt_tokens_details":{"cached_tokens":-1}}} => {prompt:10 completion:0 cacheRead:-1 cacheWrite:0}
+    improvement_test.go:247: SSE parser accepted invalid usage: {"usage":{"prompt_tokens":10,"prompt_tokens_details":{"cached_tokens":-1}}} => {prompt:10 completion:0 cacheRead:-1 cacheWrite:0}
+    improvement_test.go:246: invalid usage accepted: {"usage":{"input_tokens":9223372036854775807,"cache_read_input_tokens":1}} => {prompt:-9223372036854775808 completion:0 cacheRead:1 cacheWrite:0}
+    improvement_test.go:246: invalid usage accepted: {"usage":{"prompt_tokens":9223372036854775807,"completion_tokens":1}} => {prompt:9223372036854775807 completion:1 cacheRead:0 cacheWrite:0}
+    improvement_test.go:247: SSE parser accepted invalid usage: {"usage":{"prompt_tokens":9223372036854775807,"completion_tokens":1}} => {prompt:9223372036854775807 completion:1 cacheRead:0 cacheWrite:0}
+FAIL
+FAIL	litegate/internal/api	0.004s
+FAIL

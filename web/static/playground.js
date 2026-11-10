@@ -714,6 +714,10 @@ btnSys.addEventListener('click', openSysModal);
 document.getElementById('sysClose').addEventListener('click', closeSysModal);
 document.querySelector('#sysModal .modal-background').addEventListener('click', closeSysModal);
 
+// Explicit buttons must work on touch screens as well as Enter on a keyboard.
+btnSend.addEventListener('click', send);
+btnStop.addEventListener('click', () => { if (ctrl) ctrl.abort(); });
+
 // ===== 清空 =====
 btnClear.addEventListener('click', () => {
   if (busy) ctrl && ctrl.abort();

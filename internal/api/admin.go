@@ -300,8 +300,8 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-func (a *admin) dashboard(w http.ResponseWriter, _ *http.Request) {
-	d, err := a.st.Dashboard()
+func (a *admin) dashboard(w http.ResponseWriter, r *http.Request) {
+	d, err := a.st.DashboardContext(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -398,7 +398,7 @@ func maskChannel(c *store.Channel) channelOut {
 }
 
 // usageTrend 趋势折线图数据源:按对象维度（模型/渠道/虚拟密钥）与时间范围
-// 聚合 token/缓存/费用/速度,桶为本地时区的天（7/30 天）或小时（今天/昨天）。
+// 聚合 token/缓存/费用/速度,桶为 UTC 的天（7/30 天）或小时（今天/昨天）。
 func (a *admin) usageTrend(w http.ResponseWriter, r *http.Request) {
 	dim := r.URL.Query().Get("dim")
 	if dim != "model" && dim != "channel" && dim != "key" {
@@ -411,7 +411,7 @@ func (a *admin) usageTrend(w http.ResponseWriter, r *http.Request) {
 	default:
 		rng = "7d"
 	}
-	bucket, series, err := a.st.UsageTrend(dim, rng)
+	bucket, series, err := a.st.UsageTrendContext(r.Context(), dim, rng)
 	if err != nil {
 		writeInternalError(w, r, err)
 		return
@@ -1007,7 +1007,7 @@ func (a *admin) listLogs(w http.ResponseWriter, r *http.Request) {
 	// 按价格表回填每行的成本币种，前端据此显示 ¥/$ 而不是硬编码美元
 	if prices, err := a.st.ListModelPrices(); err == nil {
 		for i := range page.Items {
-			if p := store.MatchPrice(prices, page.Items[i].Model); p != nil {
+			if p := store.MatchPrice(prices, page.Items[i].Model); p != nil && page.Items[i].Currency == "" {
 				page.Items[i].Currency = p.Currency
 			}
 		}
@@ -1090,15 +1090,52 @@ func (a *admin) listLogSummaries(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	var prices []store.ModelPrice
-	if prices, err = a.st.ListModelPrices(); err == nil {
-		for i := range items {
-			if p := store.MatchPrice(prices, items[i].Model); p != nil {
-				items[i].Currency = p.Currency
+	prices, err := a.st.ListModelPrices()
+	if err != nil {
+		writeInternalError(w, r, err)
+		return
+	}
+	// SQL keeps currency snapshots separate. Resolve legacy rows before combining
+	// them into one complete model card, matching the model-only detail filter.
+	summaries := make([]store.LogSummary, 0, len(items))
+	byModel := make(map[string]int, len(items))
+	for _, item := range items {
+		currency := item.Currency
+		if currency == "" {
+			if price := store.MatchPrice(prices, item.Model); price != nil {
+				currency = price.Currency
+			}
+		}
+		if currency == "" {
+			currency = "USD"
+		}
+		i, exists := byModel[item.Model]
+		if !exists {
+			i = len(summaries)
+			byModel[item.Model] = i
+			summaries = append(summaries, store.LogSummary{Model: item.Model, LastTs: item.LastTs, CostByCurrency: map[string]float64{}})
+		}
+		summary := &summaries[i]
+		summary.Requests += item.Requests
+		summary.Errors += item.Errors
+		summary.PromptTokens += item.PromptTokens
+		summary.CompletionTokens += item.CompletionTokens
+		summary.CacheTokens += item.CacheTokens
+		summary.CostByCurrency[currency] += item.Cost
+	}
+	// Input is ordered by latest timestamp, so first occurrence preserves both
+	// each model's last timestamp and the existing newest-model-first ordering.
+	for i := range summaries {
+		for currency, cost := range summaries[i].CostByCurrency {
+			cost = math.Round(cost*1e6) / 1e6
+			summaries[i].CostByCurrency[currency] = cost
+			if len(summaries[i].CostByCurrency) == 1 {
+				summaries[i].Currency = currency
+				summaries[i].Cost = cost
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, map[string]any{"items": summaries})
 }
 
 func (a *admin) deletePrice(w http.ResponseWriter, r *http.Request) {

@@ -1,0 +1,4 @@
+{"width":320,"health":true,"login":true,"onboarding":true,"drawer":true,"utc":true,"currency":true,"jsErrors":0}
+{"width":390,"health":true,"login":true,"onboarding":true,"drawer":true,"utc":true,"currency":true,"jsErrors":0}
+{"width":1280,"health":true,"login":true,"onboarding":true,"drawer":false,"utc":true,"currency":true,"jsErrors":0}
+{"adminFlows":true,"loginError":true,"channelCRUD":true,"channelTest":true,"priceCreateDelete":true,"keyCRUD":true,"budgetValidation":true,"readonlyWriteDenied":true,"playgroundStream":true,"playgroundCancel":true,"pages":8,"widths":[320,390,1280],"jsErrors":0}

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 
 	"litegate/internal/store"
 )
@@ -42,8 +43,20 @@ func (u *usageFields) values() (t tokenUsage) {
 		t.cacheRead = valueOr(u.CacheReadTokens, nil)
 	}
 	t.cacheWrite = valueOr(u.CacheCreateTokens, nil)
+	// Provider usage is untrusted. Invalid counters must never reduce a budget
+	// or wrap the signed token totals used by the ledger and SQLite aggregates.
+	if t.prompt < 0 || t.completion < 0 || t.cacheRead < 0 || t.cacheWrite < 0 || t.cacheRead > math.MaxInt64-t.cacheWrite {
+		return tokenUsage{}
+	}
+	cached := t.cacheRead + t.cacheWrite
 	if u.PromptTokens == nil && u.InputTokens != nil {
-		t.prompt += t.cacheRead + t.cacheWrite
+		if t.prompt > math.MaxInt64-cached {
+			return tokenUsage{}
+		}
+		t.prompt += cached
+	}
+	if t.prompt > math.MaxInt64-t.completion {
+		return tokenUsage{}
 	}
 	return t
 }
@@ -90,27 +103,38 @@ func usageFromJSON(b []byte) (tokenUsage, bool) {
 // 不改写任何字节，对首包延迟零影响。openai 流式仅末尾 chunk 带 usage，
 // anthropic 的 message_start/message_delta 各带一半，故按「prompt 覆盖、completion 取大」合并。
 type sseUsageScanner struct {
-	carry []byte // 跨 Write 的半行残留
-	usage tokenUsage
-	found bool
+	carry    []byte // 跨 Write 的半行残留，最多 maxUsageTail
+	dropping bool   // 超长行丢弃到下一个换行，再恢复采集
+	usage    tokenUsage
+	found    bool
 }
 
 func (s *sseUsageScanner) Write(p []byte) (int, error) {
 	data := p
-	if len(s.carry) > 0 {
-		data = append(s.carry, p...)
-		s.carry = s.carry[:0]
-	}
-	start := 0
-	for {
-		idx := bytes.IndexByte(data[start:], '\n')
+	for len(data) > 0 {
+		idx := bytes.IndexByte(data, '\n')
+		part := data
+		if idx >= 0 {
+			part = data[:idx]
+		}
+		if !s.dropping {
+			if len(s.carry)+len(part) > maxUsageTail {
+				s.carry = s.carry[:0]
+				s.dropping = true
+			} else {
+				s.carry = append(s.carry, part...)
+			}
+		}
 		if idx < 0 {
 			break
 		}
-		s.scanLine(data[start : start+idx])
-		start += idx + 1
+		if !s.dropping {
+			s.scanLine(s.carry)
+		}
+		s.carry = s.carry[:0]
+		s.dropping = false
+		data = data[idx+1:]
 	}
-	s.carry = append(s.carry, data[start:]...)
 	return len(p), nil
 }
 

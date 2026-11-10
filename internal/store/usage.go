@@ -92,27 +92,32 @@ func (s *Store) KeyDailyUsage(keyID int64, days int) ([]KeyDailyUsageRow, error)
 // 逐模型判定（MatchPrice 前缀匹配无法用 SQL JOIN 表达，在 Go 侧聚合）；
 // 改过币种的历史行按现值近似，可接受。返回迁移的 (密钥, 日) 组数。
 func (s *Store) BackfillKeyUsageFromLogs() (int, error) {
-	var haveLogs, haveUsage int
-	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM request_logs`).Scan(&haveLogs); err != nil {
+	tx, err := s.DB.Begin()
+	if err != nil {
 		return 0, err
 	}
-	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM key_usage_day`).Scan(&haveUsage); err != nil {
+	defer tx.Rollback()
+	var haveLogs, haveUsage int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM request_logs`).Scan(&haveLogs); err != nil {
+		return 0, err
+	}
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM key_usage_day`).Scan(&haveUsage); err != nil {
 		return 0, err
 	}
 	if haveLogs == 0 || haveUsage > 0 {
 		return 0, nil
 	}
-	prices, err := s.ListModelPrices()
+	prices, err := listModelPrices(tx)
 	if err != nil {
 		return 0, err
 	}
-	rows, err := s.DB.Query(
+	rows, err := tx.Query(
 		`SELECT api_key_id, substr(ts,1,10), model, COUNT(*),
 		        IFNULL(SUM(status >= 400 OR error != ''), 0),
-		        IFNULL(SUM(prompt_tokens + completion_tokens), 0), IFNULL(SUM(cost), 0)
+		        IFNULL(SUM(prompt_tokens + completion_tokens), 0), IFNULL(SUM(cost), 0), currency
 		 FROM request_logs
 		 WHERE api_key_id > 0
-		 GROUP BY api_key_id, substr(ts,1,10), model`)
+		 GROUP BY api_key_id, substr(ts,1,10), model, currency`)
 	if err != nil {
 		return 0, err
 	}
@@ -124,10 +129,10 @@ func (s *Store) BackfillKeyUsageFromLogs() (int, error) {
 	agg := map[key]*KeyDailyUsageRow{}
 	for rows.Next() {
 		var keyID int64
-		var day, model string
+		var day, model, currency string
 		var reqs, errs, tokens int64
 		var cost float64
-		if err := rows.Scan(&keyID, &day, &model, &reqs, &errs, &tokens, &cost); err != nil {
+		if err := rows.Scan(&keyID, &day, &model, &reqs, &errs, &tokens, &cost, &currency); err != nil {
 			return 0, err
 		}
 		a := agg[key{keyID, day}]
@@ -138,7 +143,10 @@ func (s *Store) BackfillKeyUsageFromLogs() (int, error) {
 		a.Requests += reqs
 		a.Errors += errs
 		a.Tokens += tokens
-		if p := MatchPrice(prices, model); p != nil && p.Currency == "CNY" {
+		if currency == "" {
+			currency = matchCurrency(prices, model)
+		}
+		if currency == "CNY" {
 			a.CostCNY += cost
 		} else {
 			a.CostUSD += cost
@@ -147,16 +155,22 @@ func (s *Store) BackfillKeyUsageFromLogs() (int, error) {
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
 	n := 0
 	for keyIDDay, a := range agg {
 		// BackfillKeyUsageFromLogs 只在空表时进入此处，直接 INSERT
-		if _, err := s.DB.Exec(
+		if _, err := tx.Exec(
 			`INSERT INTO key_usage_day(api_key_id, day, requests, errors, tokens, cost_usd, cost_cny)
 			 VALUES(?, ?, ?, ?, ?, ?, ?)`,
 			keyIDDay.keyID, a.Day, a.Requests, a.Errors, a.Tokens, a.CostUSD, a.CostCNY); err != nil {
-			return n, fmt.Errorf("backfill %d/%s: %w", keyIDDay.keyID, a.Day, err)
+			return 0, fmt.Errorf("backfill %d/%s: %w", keyIDDay.keyID, a.Day, err)
 		}
 		n++
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
 	}
 	return n, nil
 }
